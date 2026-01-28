@@ -2,6 +2,7 @@ mod db;
 mod git;
 mod i18n;
 mod tui;
+mod setup;
 mod worktree;
 
 use anyhow::Result;
