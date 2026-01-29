@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::db;
 use crate::git;
@@ -36,67 +35,6 @@ fn get_worktree_path(repo_path: &Path, branch: &str) -> Result<PathBuf> {
     Ok(wt_base.join(branch))
 }
 
-/// Run automatic setup based on project files
-fn run_auto_setup(worktree_path: &Path) -> Result<()> {
-    let mut commands = Vec::new();
-    let mut shell_cmd = String::new();
-
-    // Check for .nvmrc
-    if worktree_path.join(".nvmrc").exists() {
-        commands.push("nvm use");
-    }
-
-    // Check for package managers
-    if worktree_path.join("pnpm-lock.yaml").exists() {
-        commands.push("pnpm install");
-    } else if worktree_path.join("yarn.lock").exists() {
-        commands.push("yarn install");
-    }
-
-    if commands.is_empty() {
-        return Ok(());
-    }
-
-    // Construct the shell command
-    // We try to source zshrc to get nvm if needed, assuming user is on zsh as per env
-    if commands.contains(&"nvm use") {
-        shell_cmd.push_str("source ~/.zshrc 2>/dev/null || true; ");
-    }
-    
-    shell_cmd.push_str(&commands.join(" && "));
-    
-    println!("Running automatic setup: {}", shell_cmd);
-
-    // Use zsh to execute the chain
-    let output = Command::new("zsh")
-        .arg("-c")
-        .arg(&shell_cmd)
-        .current_dir(worktree_path)
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => {
-            println!("✓ Setup completed successfully");
-            Ok(())
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            eprintln!("Warning: Setup completed with issues.");
-            if !stdout.trim().is_empty() {
-                println!("Output: {}", stdout);
-            }
-            if !stderr.trim().is_empty() {
-                eprintln!("Error output: {}", stderr);
-            }
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Warning: Could not run setup command: {}", e);
-            Ok(())
-        }
-    }
-}
 
 /// Change to the worktree directory and run setup
 fn switch_to_worktree(worktree_path: &Path) -> Result<()> {
@@ -106,7 +44,7 @@ fn switch_to_worktree(worktree_path: &Path) -> Result<()> {
     println!("\nTo switch to this worktree, run:");
     println!("  cd {}", worktree_path.display());
 
-    run_auto_setup(worktree_path)?;
+    crate::setup::SetupManager::run_auto_setup(worktree_path)?;
     
     Ok(())
 }
