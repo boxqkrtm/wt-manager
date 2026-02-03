@@ -56,20 +56,7 @@ pub fn show_project_selector() -> Result<()> {
                 println!("\n{} {}", messages.switching_to_project(), project.name);
                 println!("  cd {}", project.path.display());
                 
-                // Run pnpm install
-                let output = std::process::Command::new("pnpm")
-                    .arg("install")
-                    .current_dir(&project.path)
-                    .output();
-
-                match output {
-                    Ok(output) if output.status.success() => {
-                        println!("{}", messages.deps_installed());
-                    }
-                    _ => {
-                        eprintln!("{}", messages.pnpm_install_warning());
-                    }
-                }
+                crate::setup::SetupManager::run_auto_setup(&project.path)?;
             }
         }
         SelectorAction::Delete(_) | SelectorAction::Cancel => {
@@ -122,20 +109,7 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                     println!("\n{} {}", messages.switching_to_worktree(), wt.branch);
                     println!("  cd {}", wt.path.display());
                     
-                    // Run pnpm install
-                    let output = std::process::Command::new("pnpm")
-                        .arg("install")
-                        .current_dir(&wt.path)
-                        .output();
-
-                    match output {
-                        Ok(output) if output.status.success() => {
-                            println!("{}", messages.deps_installed());
-                        }
-                        _ => {
-                            eprintln!("{}", messages.pnpm_install_warning());
-                        }
-                    }
+                    crate::setup::SetupManager::run_auto_setup(&wt.path)?;
                 } else {
                     // No exact match - this shouldn't happen with new logic
                     println!("\n{} {}", messages.creating_new_worktree(), branch_name);
