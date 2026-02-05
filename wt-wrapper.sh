@@ -5,14 +5,6 @@
 #   source /path/to/wt-manager/wt-wrapper.sh
 #
 
-trash_or_rm() {
-    if command -v trash >/dev/null 2>&1; then
-        trash "$@"
-    else
-        rm -f "$@"
-    fi
-}
-
 wt() {
     local wt_bin="${HOME}/.cargo/bin/wt"
     
@@ -44,7 +36,7 @@ wt() {
         # Change to directory
         if [[ -d "$target_dir" ]]; then
             cd "$target_dir" || {
-                trash_or_rm "$tmp_output"
+                rm -f "$tmp_output"
                 return 1
             }
             echo ""
@@ -52,7 +44,7 @@ wt() {
         fi
     fi
     
-    trash_or_rm "$tmp_output"
+    rm -f "$tmp_output"
     return $exit_code
 }
 
