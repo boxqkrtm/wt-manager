@@ -134,10 +134,17 @@ pub fn add_worktree(repo_root: &Path, worktree_path: &Path, branch: &str, create
 
 /// Remove a worktree
 /// Returns an error if the worktree has uncommitted changes
-pub fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
-    let output = Command::new("git")
-        .arg("worktree")
-        .arg("remove")
+pub fn remove_worktree(repo_root: &Path, worktree_path: &Path, force: bool) -> Result<()> {
+    let mut cmd = Command::new("git");
+
+    cmd.arg("worktree")
+        .arg("remove");
+
+    if force {
+        cmd.arg("-f");
+    }
+
+    let output = cmd
         .arg(worktree_path)
         .current_dir(repo_root)
         .output()?;

@@ -28,9 +28,28 @@ source ~/.zshrc  # 현재 셸에서 활성화
 # TUI로 워크트리 검색/생성
 wt
 
+# TUI로 강제 진입
+wt tui
+
 # 특정 브랜치 워크트리 생성/이동
 wt feature-branch
+
+# 명령형(worktree)
+wt worktree list
+wt worktree switch feature-branch
+wt worktree delete feature-branch
+wt worktree delete feature-branch --force
+
+# 저장된 프로젝트 목록
+wt project list
 ```
+
+### `--help`에서 확인할 수 있는 항목
+
+- `wt --help`에 기본 동작(`wt`, `wt <branch>`), TUI 진입(`wt tui`), 워크트리/프로젝트 명령이 노출됩니다.
+- `wt worktree switch`와 `wt <branch>`는 동작이 같습니다.
+- 삭제는 기본적으로 안전 삭제입니다. 메인 워크트리는 삭제할 수 없고, 실패 시 메시지에 `--force` 재시도 권장안이 표시됩니다.
+- 실제로 셸의 작업 디렉터리가 이동되는 것은 `wt-wrapper.sh`의 `cd` 파싱 동작입니다.
 
 ### TUI 조작법
 
