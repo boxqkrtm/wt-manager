@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Alignment},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
 use std::collections::HashMap;
@@ -104,7 +104,8 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                     // Existing worktree - switch to it
                     println!("\n{} {}", messages.switching_to_worktree(), wt.branch);
                     println!("  cd {}", wt.path.display());
-                    
+
+                    crate::setup::SetupManager::run_post_cd(repo_root, &wt.path)?;
                     crate::setup::SetupManager::run_auto_setup(&wt.path)?;
                 } else {
                     // No exact match - this shouldn't happen with new logic
@@ -152,6 +153,60 @@ enum SelectorAction {
     Cancel,
 }
 
+#[derive(Debug, Default)]
+struct InputState {
+    input: String,
+    cursor_index: usize,
+    selected_index: usize,
+}
+
+fn byte_index(value: &str, char_index: usize) -> usize {
+    value
+        .char_indices()
+        .nth(char_index)
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| value.len())
+}
+
+fn char_len(value: &str) -> usize {
+    value.chars().count()
+}
+
+fn insert_char(state: &mut InputState, character: char) {
+    let byte_index = byte_index(&state.input, state.cursor_index);
+    state.input.insert(byte_index, character);
+    state.cursor_index += 1;
+}
+
+fn backspace_char(state: &mut InputState) {
+    if state.cursor_index == 0 {
+        return;
+    }
+
+    let end = byte_index(&state.input, state.cursor_index);
+    let start = byte_index(&state.input, state.cursor_index - 1);
+    state.input.replace_range(start..end, "");
+    state.cursor_index -= 1;
+}
+
+fn delete_char(state: &mut InputState) {
+    if state.cursor_index >= char_len(&state.input) {
+        return;
+    }
+
+    let start = byte_index(&state.input, state.cursor_index);
+    let end = byte_index(&state.input, state.cursor_index + 1);
+    state.input.replace_range(start..end, "");
+}
+
+fn clamp_selected_index(selected_index: &mut usize, visible_len: usize) {
+    if visible_len == 0 {
+        *selected_index = 0;
+    } else if *selected_index >= visible_len {
+        *selected_index = visible_len - 1;
+    }
+}
+
 fn format_worktree_item(
     worktree: &git::WorktreeInfo,
     messages: &crate::i18n::Messages,
@@ -181,14 +236,14 @@ fn run_worktree_selector(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut input = String::new();
+    let mut state = InputState::default();
     let matcher = SkimMatcherV2::default();
     let mut pr_cache: HashMap<String, Option<git::PullRequestInfo>> = HashMap::new();
     let mut last_input_change =
         Instant::now() - Duration::from_millis(WORKTREE_PR_SEARCH_DEBOUNCE_MS);
 
     let result = loop {
-        let filtered_worktrees: Vec<(&git::WorktreeInfo, i64)> = if input.is_empty() {
+        let filtered_worktrees: Vec<(&git::WorktreeInfo, i64)> = if state.input.is_empty() {
             worktrees.iter().map(|worktree| (worktree, 0)).collect()
         } else {
             let mut matches: Vec<(&git::WorktreeInfo, i64)> = worktrees
@@ -202,13 +257,15 @@ fn run_worktree_selector(
                             .and_then(|pull_request| pull_request.as_ref()),
                     );
                     matcher
-                        .fuzzy_match(&item, &input)
+                        .fuzzy_match(&item, &state.input)
                         .map(|score| (worktree, score))
                 })
                 .collect();
             matches.sort_by(|left, right| right.1.cmp(&left.1));
             matches
         };
+        let visible_len = filtered_worktrees.len().min(10);
+        clamp_selected_index(&mut state.selected_index, visible_len);
 
         if last_input_change.elapsed() >= Duration::from_millis(WORKTREE_PR_SEARCH_DEBOUNCE_MS) {
             let missing_branches: Vec<String> = filtered_worktrees
@@ -256,14 +313,15 @@ fn run_worktree_selector(
                 .borders(Borders::ALL)
                 .title(messages.help_search())
                 .style(Style::default().fg(Color::Yellow));
-            let input_text = Paragraph::new(input.as_str())
+            let input_text = Paragraph::new(state.input.as_str())
                 .block(input_block)
                 .style(Style::default().fg(Color::White));
             f.render_widget(input_text, chunks[1]);
+            f.set_cursor_position((chunks[1].x + 1 + state.cursor_index as u16, chunks[1].y + 1));
 
-            let list_items: Vec<ListItem> = if filtered_worktrees.is_empty() && !input.is_empty() {
+            let list_items: Vec<ListItem> = if filtered_worktrees.is_empty() && !state.input.is_empty() {
                 vec![ListItem::new(Line::from(vec![Span::styled(
-                    messages.create_new_prefix().replace("{}", &input),
+                    messages.create_new_prefix().replace("{}", &state.input),
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
                 )]))]
             } else {
@@ -289,48 +347,56 @@ fn run_worktree_selector(
                     filtered_worktrees.len()
                 )))
                 .style(Style::default().fg(Color::White));
-            f.render_widget(list, chunks[2]);
+            let mut list_state = ListState::default();
+            if visible_len > 0 {
+                list_state.select(Some(state.selected_index));
+            }
+            f.render_stateful_widget(list, chunks[2], &mut list_state);
 
             let has_exact_match = worktrees
                 .iter()
-                .any(|worktree| worktree.branch.eq_ignore_ascii_case(&input));
+                .any(|worktree| worktree.branch.eq_ignore_ascii_case(&state.input));
 
-            let help_text = if input.is_empty() {
+            let help_text = if state.input.is_empty() {
                 format!(
-                    "{} | {} | {} | {} | {} {} | {}",
+                    "{} | {} | {} | {} | {} {} | {} | {}",
                     messages.help_search(),
                     messages.help_tab(),
                     messages.help_enter_select(),
                     messages.help_ctrl_b_create(),
                     messages.help_ctrl_x_delete(),
                     messages.help_exact_match(),
-                    messages.help_cancel()
+                    messages.help_cancel(),
+                    "Arrows"
                 )
             } else if filtered_worktrees.is_empty() {
                 format!(
-                    "{} | {} | {}",
+                    "{} | {} | {} | {}",
                     messages.help_create_new_branch(),
                     messages.help_backspace(),
-                    messages.help_cancel()
+                    messages.help_cancel(),
+                    "Arrows"
                 )
             } else if has_exact_match {
                 format!(
-                    "{} | {} | {} | {} | {} | {}",
+                    "{} | {} | {} | {} | {} | {} | {}",
                     messages.help_tab(),
                     messages.help_enter_select(),
                     messages.help_ctrl_b_create(),
                     messages.help_ctrl_x_delete(),
                     messages.help_backspace(),
-                    messages.help_cancel()
+                    messages.help_cancel(),
+                    "Arrows"
                 )
             } else {
                 format!(
-                    "{} | {} | {} | {} | {}",
+                    "{} | {} | {} | {} | {} | {}",
                     messages.help_tab(),
                     messages.help_enter_select(),
                     messages.help_ctrl_b_create(),
                     messages.help_backspace(),
-                    messages.help_cancel()
+                    messages.help_cancel(),
+                    "Arrows"
                 )
             };
 
@@ -352,15 +418,15 @@ fn run_worktree_selector(
                         break SelectorAction::Cancel;
                     }
                     KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if !input.is_empty() {
-                            break SelectorAction::Select(format!("__CREATE_NEW__{}", input));
+                        if !state.input.is_empty() {
+                            break SelectorAction::Select(format!("__CREATE_NEW__{}", state.input));
                         }
                     }
                     KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if !input.is_empty() {
+                        if !state.input.is_empty() {
                             if let Some(worktree) = worktrees
                                 .iter()
-                                .find(|worktree| worktree.branch.eq_ignore_ascii_case(&input))
+                                .find(|worktree| worktree.branch.eq_ignore_ascii_case(&state.input))
                             {
                                 break SelectorAction::Delete(worktree.branch.clone());
                             }
@@ -368,21 +434,49 @@ fn run_worktree_selector(
                     }
                     KeyCode::Esc => break SelectorAction::Cancel,
                     KeyCode::Char(character) => {
-                        input.push(character);
+                        insert_char(&mut state, character);
                         last_input_change = Instant::now();
+                        state.selected_index = 0;
                     }
                     KeyCode::Backspace => {
-                        input.pop();
+                        backspace_char(&mut state);
                         last_input_change = Instant::now();
+                        state.selected_index = 0;
+                    }
+                    KeyCode::Delete => {
+                        delete_char(&mut state);
+                        last_input_change = Instant::now();
+                        state.selected_index = 0;
+                    }
+                    KeyCode::Left => {
+                        state.cursor_index = state.cursor_index.saturating_sub(1);
+                    }
+                    KeyCode::Right => {
+                        state.cursor_index = (state.cursor_index + 1).min(char_len(&state.input));
+                    }
+                    KeyCode::Home => {
+                        state.cursor_index = 0;
+                    }
+                    KeyCode::End => {
+                        state.cursor_index = char_len(&state.input);
+                    }
+                    KeyCode::Up => {
+                        state.selected_index = state.selected_index.saturating_sub(1);
+                    }
+                    KeyCode::Down => {
+                        if visible_len > 0 {
+                            state.selected_index = (state.selected_index + 1).min(visible_len - 1);
+                        }
                     }
                     KeyCode::Tab => {
-                        if let Some((worktree, _)) = filtered_worktrees.first() {
-                            input = worktree.branch.clone();
+                        if let Some((worktree, _)) = filtered_worktrees.get(state.selected_index) {
+                            state.input = worktree.branch.clone();
+                            state.cursor_index = char_len(&state.input);
                             last_input_change = Instant::now();
                         }
                     }
                     KeyCode::Enter => {
-                        if let Some((worktree, _)) = filtered_worktrees.first() {
+                        if let Some((worktree, _)) = filtered_worktrees.get(state.selected_index) {
                             break SelectorAction::Select(worktree.branch.clone());
                         }
                     }
@@ -406,22 +500,24 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut input = String::new();
+    let mut state = InputState::default();
     let matcher = SkimMatcherV2::default();
 
     let result = loop {
-        let filtered_items: Vec<(String, i64)> = if input.is_empty() {
+        let filtered_items: Vec<(String, i64)> = if state.input.is_empty() {
             items.iter().map(|s| (s.clone(), 0)).collect()
         } else {
             let mut matches: Vec<(String, i64)> = items
                 .iter()
                 .filter_map(|item| {
-                    matcher.fuzzy_match(item, &input).map(|score| (item.clone(), score))
+                    matcher.fuzzy_match(item, &state.input).map(|score| (item.clone(), score))
                 })
                 .collect();
             matches.sort_by(|a, b| b.1.cmp(&a.1));
             matches
         };
+        let visible_len = filtered_items.len().min(10);
+        clamp_selected_index(&mut state.selected_index, visible_len);
 
         terminal.draw(|f| {
             let chunks = Layout::default()
@@ -449,16 +545,17 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
                 .borders(Borders::ALL)
                 .title(messages.help_search())
                 .style(Style::default().fg(Color::Yellow));
-            let input_text = Paragraph::new(input.as_str())
+            let input_text = Paragraph::new(state.input.as_str())
                 .block(input_block)
                 .style(Style::default().fg(Color::White));
             f.render_widget(input_text, chunks[1]);
+            f.set_cursor_position((chunks[1].x + 1 + state.cursor_index as u16, chunks[1].y + 1));
 
             // Filtered list
-            let list_items: Vec<ListItem> = if filtered_items.is_empty() && !input.is_empty() {
+            let list_items: Vec<ListItem> = if filtered_items.is_empty() && !state.input.is_empty() {
                 vec![ListItem::new(Line::from(vec![
                     Span::styled(
-                        messages.create_new_prefix().replace("{}", &input),
+                        messages.create_new_prefix().replace("{}", &state.input),
                         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
                     )
                 ]))]
@@ -479,46 +576,50 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
                         filtered_items.len()
                     )))
                 .style(Style::default().fg(Color::White));
-            f.render_widget(list, chunks[2]);
+            let mut list_state = ListState::default();
+            if visible_len > 0 {
+                list_state.select(Some(state.selected_index));
+            }
+            f.render_stateful_widget(list, chunks[2], &mut list_state);
 
             // Help
             let help_text = if allow_create && allow_delete {
                 // Check if input exactly matches an item
                 let has_exact_match = items.iter().any(|item| {
                     let item_name = extract_worktree_name(item);
-                    item_name.eq_ignore_ascii_case(&input)
+                    item_name.eq_ignore_ascii_case(&state.input)
                 });
 
-                if input.is_empty() {
-                    format!("{} | {} | {} | {} | {} {} | {}", 
+                if state.input.is_empty() {
+                    format!("{} | {} | {} | {} | {} {} | {} | {}", 
                         messages.help_search(), messages.help_tab(), messages.help_enter_select(), 
-                        messages.help_ctrl_b_create(), messages.help_ctrl_x_delete(), messages.help_exact_match(), messages.help_cancel())
+                        messages.help_ctrl_b_create(), messages.help_ctrl_x_delete(), messages.help_exact_match(), messages.help_cancel(), "Arrows")
                 } else if filtered_items.is_empty() {
-                    format!("{} | {} | {}", messages.help_create_new_branch(), messages.help_backspace(), messages.help_cancel())
+                    format!("{} | {} | {} | {}", messages.help_create_new_branch(), messages.help_backspace(), messages.help_cancel(), "Arrows")
                 } else if has_exact_match {
-                    format!("{} | {} | {} | {} | {} | {}", 
+                    format!("{} | {} | {} | {} | {} | {} | {}", 
                         messages.help_tab(), messages.help_enter_select(), messages.help_ctrl_b_create(), 
-                        messages.help_ctrl_x_delete(), messages.help_backspace(), messages.help_cancel())
+                        messages.help_ctrl_x_delete(), messages.help_backspace(), messages.help_cancel(), "Arrows")
                 } else {
-                     format!("{} | {} | {} | {} | {}", 
+                     format!("{} | {} | {} | {} | {} | {}", 
                         messages.help_tab(), messages.help_enter_select(), messages.help_ctrl_b_create(), 
-                        messages.help_backspace(), messages.help_cancel())
+                        messages.help_backspace(), messages.help_cancel(), "Arrows")
                 }
             } else if allow_create {
-                if input.is_empty() {
-                     format!("{} | {} | {} | {} | {}", 
+                if state.input.is_empty() {
+                     format!("{} | {} | {} | {} | {} | {}", 
                         messages.help_search(), messages.help_tab(), messages.help_enter_select(), 
-                        messages.help_ctrl_b_create(), messages.help_cancel())
+                        messages.help_ctrl_b_create(), messages.help_cancel(), "Arrows")
                 } else if filtered_items.is_empty() {
-                    format!("{} | {} | {}", messages.help_create_new_branch(), messages.help_backspace(), messages.help_cancel())
+                    format!("{} | {} | {} | {}", messages.help_create_new_branch(), messages.help_backspace(), messages.help_cancel(), "Arrows")
                 } else {
-                     format!("{} | {} | {} | {} | {}", 
+                     format!("{} | {} | {} | {} | {} | {}", 
                         messages.help_tab(), messages.help_enter_select(), messages.help_ctrl_b_create(), 
-                        messages.help_backspace(), messages.help_cancel())
+                        messages.help_backspace(), messages.help_cancel(), "Arrows")
                 }
             } else {
-                 format!("{} | {} | {} | {}", 
-                    messages.help_search(), messages.help_tab(), messages.help_enter_select(), messages.help_cancel())
+                 format!("{} | {} | {} | {} | {}", 
+                    messages.help_search(), messages.help_tab(), messages.help_enter_select(), messages.help_cancel(), "Arrows")
             };
             
             let help = Paragraph::new(help_text)
@@ -536,17 +637,17 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
                     }
                     KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+B: Create new branch with current input (only if allowed)
-                        if allow_create && !input.is_empty() {
-                            break SelectorAction::Select(format!("__CREATE_NEW__{}", input));
+                        if allow_create && !state.input.is_empty() {
+                            break SelectorAction::Select(format!("__CREATE_NEW__{}", state.input));
                         }
                     }
                     KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+X: Delete exact match (only if allowed and input exactly matches)
-                        if allow_delete && !input.is_empty() {
+                        if allow_delete && !state.input.is_empty() {
                             // Check for exact match
                             let exact_match = items.iter().find(|item| {
                                 let item_name = extract_worktree_name(item);
-                                item_name.eq_ignore_ascii_case(&input)
+                                item_name.eq_ignore_ascii_case(&state.input)
                             });
 
                             if let Some(matched) = exact_match {
@@ -557,22 +658,49 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
                     }
                     KeyCode::Esc => break SelectorAction::Cancel,
                     KeyCode::Char(c) => {
-                        input.push(c);
+                        insert_char(&mut state, c);
+                        state.selected_index = 0;
                     }
                     KeyCode::Backspace => {
-                        input.pop();
+                        backspace_char(&mut state);
+                        state.selected_index = 0;
+                    }
+                    KeyCode::Delete => {
+                        delete_char(&mut state);
+                        state.selected_index = 0;
+                    }
+                    KeyCode::Left => {
+                        state.cursor_index = state.cursor_index.saturating_sub(1);
+                    }
+                    KeyCode::Right => {
+                        state.cursor_index = (state.cursor_index + 1).min(char_len(&state.input));
+                    }
+                    KeyCode::Home => {
+                        state.cursor_index = 0;
+                    }
+                    KeyCode::End => {
+                        state.cursor_index = char_len(&state.input);
+                    }
+                    KeyCode::Up => {
+                        state.selected_index = state.selected_index.saturating_sub(1);
+                    }
+                    KeyCode::Down => {
+                        if visible_len > 0 {
+                            state.selected_index = (state.selected_index + 1).min(visible_len - 1);
+                        }
                     }
                     KeyCode::Tab => {
                         // Autocomplete with top match
-                        if let Some((matched, _)) = filtered_items.first() {
+                        if let Some((matched, _)) = filtered_items.get(state.selected_index) {
                             // Extract branch name (remove markers like " (main)")
                             let branch = extract_worktree_name(matched).to_string();
-                            input = branch;
+                            state.input = branch;
+                            state.cursor_index = char_len(&state.input);
                         }
                     }
                     KeyCode::Enter => {
                         // Select top fuzzy match
-                        if let Some((matched, _)) = filtered_items.first() {
+                        if let Some((matched, _)) = filtered_items.get(state.selected_index) {
                             // Extract branch name (remove markers like " (main)")
                             let branch = extract_worktree_name(matched).to_string();
                             break SelectorAction::Select(branch);

@@ -1,81 +1,105 @@
 use anyhow::Result;
-use std::path::Path;
+use std::fs;
+use std::path::{Component, Path};
 use std::process::Command;
 
 pub struct SetupManager;
 
 impl SetupManager {
-    /// Run automatic setup based on project files (mise, nvm, pnpm, yarn, npm)
     pub fn run_auto_setup(worktree_path: &Path) -> Result<()> {
-        let mut commands = Vec::new();
-        let mut shell_cmd = String::new();
-        let messages = crate::i18n::Messages::with_language(crate::i18n::Language::detect());
+        let _ = worktree_path;
+        Ok(())
+    }
 
-        // 1. Environment Setup (mise or nvm)
-        if worktree_path.join("mise.toml").exists() || worktree_path.join(".mise.toml").exists() {
-            commands.push("mise install");
-        } else if worktree_path.join(".nvmrc").exists() {
-            commands.push("nvm use");
+    pub fn run_post_create(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+        if let Some(config) = crate::db::get_project_automation(repo_root)? {
+            Self::copy_configured_files(repo_root, worktree_path, &config.copy_files)?;
+            Self::run_hooks(worktree_path, "post-create", &config.post_create_hooks)?;
         }
 
-        // 2. Package Manager Setup
-        if worktree_path.join("pnpm-lock.yaml").exists() {
-            commands.push("pnpm install");
-        } else if worktree_path.join("yarn.lock").exists() {
-            commands.push("yarn install");
-        } else if worktree_path.join("package-lock.json").exists() {
-            commands.push("npm install");
+        Ok(())
+    }
+
+    pub fn run_post_cd(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+        if let Some(config) = crate::db::get_project_automation(repo_root)? {
+            Self::run_hooks(worktree_path, "post-cd", &config.post_cd_hooks)?;
         }
 
-        if commands.is_empty() {
-            return Ok(());
-        }
+        Ok(())
+    }
 
-        // 3. Command Execution via Shell
-        // Source shell config to ensure version managers are available
-        if commands.iter().any(|&c| c == "nvm use" || c == "mise install") {
-            shell_cmd.push_str("source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; ");
-        }
-        
-        shell_cmd.push_str(&commands.join(" && "));
-        
-        println!("{}: {}", messages.running_setup(), shell_cmd);
+    fn copy_configured_files(
+        repo_root: &Path,
+        worktree_path: &Path,
+        copy_files: &[String],
+    ) -> Result<()> {
+        for relative_path in copy_files {
+            let path = Path::new(relative_path);
+            let is_safe_relative = !path.is_absolute()
+                && path.components().all(|component| {
+                    !matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+                });
 
-        let output = Command::new("zsh")
-            .arg("-c")
-            .arg(&shell_cmd)
-            .current_dir(worktree_path)
-            .output();
-
-        match output {
-            Ok(output) if output.status.success() => {
-                if commands.iter().any(|&c| c == "pnpm install") {
-                    println!("{}", messages.deps_installed());
-                } else {
-                    println!("{}", messages.setup_completed());
-                }
-                Ok(())
+            if !is_safe_relative {
+                eprintln!("Warning: skipping unsafe copy path '{}'", relative_path);
+                continue;
             }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                eprintln!("{}", messages.setup_completed_with_issues());
-                if !stdout.trim().is_empty() {
-                    println!("{}: {}", messages.output_label(), stdout);
-                }
-                if !stderr.trim().is_empty() {
-                    eprintln!("{}: {}", messages.error_output_label(), stderr);
-                }
-                Ok(())
+
+            let source = repo_root.join(relative_path);
+            if !source.exists() {
+                eprintln!("Warning: copy source not found '{}'", relative_path);
+                continue;
             }
-            Err(e) => {
-                if commands.iter().any(|&c| c == "pnpm install") {
-                    eprintln!("{}: {}", messages.pnpm_install_warning(), e);
-                } else {
-                    eprintln!("{}: {}", messages.setup_command_error(), e);
+
+            let destination = worktree_path.join(relative_path);
+            if destination.exists() {
+                eprintln!("Warning: copy destination already exists '{}'", relative_path);
+                continue;
+            }
+
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            fs::copy(&source, &destination)?;
+            println!("Copied '{}'", relative_path);
+        }
+
+        Ok(())
+    }
+
+    fn run_hooks(worktree_path: &Path, hook_name: &str, hooks: &[String]) -> Result<()> {
+        for hook in hooks {
+            println!("Running {} hook: {}", hook_name, hook);
+
+            let output = Command::new("zsh")
+                .arg("-c")
+                .arg(format!(
+                    "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; {}",
+                    hook
+                ))
+                .current_dir(worktree_path)
+                .output();
+
+            match output {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    eprintln!("Warning: {} hook failed", hook_name);
+                    if !stdout.trim().is_empty() {
+                        println!("Output: {}", stdout);
+                    }
+                    if !stderr.trim().is_empty() {
+                        eprintln!("Error output: {}", stderr);
+                    }
                 }
-                Ok(())
+                Err(error) => {
+                    eprintln!("Warning: failed to run {} hook: {}", hook_name, error);
+                }
             }
         }
+
+        Ok(())
     }
 }

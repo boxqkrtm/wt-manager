@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 use crate::db;
 use crate::git;
 
+pub struct PreparedWorktree {
+    pub path: PathBuf,
+    pub existed: bool,
+}
+
 fn short_hash(value: &str, length: usize) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
@@ -54,18 +59,8 @@ fn get_worktree_base_candidates(repo_path: &Path) -> Result<Vec<PathBuf>> {
             sanitize_segment(&repository.name),
             remote_hash
         ));
-        let owner_repo_base = home.join("_wt").join(format!(
-            "{}-{}",
-            sanitize_segment(&repository.owner),
-            sanitize_segment(&repository.name)
-        ));
 
         candidates.push(owner_repo_hash_base);
-        // Keep supporting the pre-hash owner-repo layout for backward compatibility.
-        // This legacy fallback can be removed once existing users have migrated.
-        if !candidates.contains(&owner_repo_base) {
-            candidates.push(owner_repo_base);
-        }
     }
 
     // Keep supporting the oldest repo_hash layout for backward compatibility.
@@ -110,7 +105,7 @@ fn get_worktree_path(repo_path: &Path, branch: &str) -> Result<PathBuf> {
 
 
 /// Change to the worktree directory and run setup
-fn switch_to_worktree(worktree_path: &Path) -> Result<()> {
+fn switch_to_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
     let messages = crate::i18n::Messages::new();
     // We can't actually change the directory of the parent shell from Rust
     // Instead, we'll print the command for the user to execute
@@ -118,23 +113,24 @@ fn switch_to_worktree(worktree_path: &Path) -> Result<()> {
     println!("\n{}", messages.switch_to_worktree_guide());
     println!("  cd {}", worktree_path.display());
 
+    crate::setup::SetupManager::run_post_cd(repo_root, worktree_path)?;
     crate::setup::SetupManager::run_auto_setup(worktree_path)?;
     
     Ok(())
 }
 
-/// Handle worktree creation or switching
-pub fn handle_worktree(repo_root: &Path, branch: &str) -> Result<()> {
+pub fn prepare_worktree(repo_root: &Path, branch: &str) -> Result<PreparedWorktree> {
     let messages = crate::i18n::Messages::new();
-    let worktree_path = find_existing_worktree_path(repo_root, branch)?
-        .unwrap_or(get_worktree_path(repo_root, branch)?);
-
-    // Check if worktree already exists
-    if worktree_path.exists() {
+    if let Some(worktree_path) = find_existing_worktree_path(repo_root, branch)? {
         println!("{}", messages.worktree_already_exists().replace("{}", branch));
         db::update_last_accessed(repo_root)?;
-        return switch_to_worktree(&worktree_path);
+        return Ok(PreparedWorktree {
+            path: worktree_path,
+            existed: true,
+        });
     }
+
+    let worktree_path = get_worktree_path(repo_root, branch)?;
 
     // Create worktree base directory
     let wt_base = get_worktree_base(repo_root)?;
@@ -158,7 +154,19 @@ pub fn handle_worktree(repo_root: &Path, branch: &str) -> Result<()> {
     }
 
     db::update_last_accessed(repo_root)?;
-    switch_to_worktree(&worktree_path)?;
+    Ok(PreparedWorktree {
+        path: worktree_path,
+        existed: false,
+    })
+}
+
+/// Handle worktree creation or switching
+pub fn handle_worktree(repo_root: &Path, branch: &str) -> Result<()> {
+    let prepared = prepare_worktree(repo_root, branch)?;
+    if !prepared.existed {
+        crate::setup::SetupManager::run_post_create(repo_root, &prepared.path)?;
+    }
+    switch_to_worktree(repo_root, &prepared.path)?;
 
     Ok(())
 }

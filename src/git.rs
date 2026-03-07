@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::thread;
 use std::time::Duration;
 
@@ -343,6 +343,79 @@ pub fn get_open_prs_for_branches(
     }
 
     Ok(pull_requests)
+}
+
+pub fn resolve_merge_base_branch(repo_root: &Path, explicit_base: Option<&str>) -> Result<String> {
+    if let Some(base) = explicit_base {
+        return Ok(base.to_string());
+    }
+
+    let output = Command::new("git")
+        .arg("symbolic-ref")
+        .arg("--quiet")
+        .arg("--short")
+        .arg("refs/remotes/origin/HEAD")
+        .current_dir(repo_root)
+        .output()?;
+
+    if output.status.success() {
+        let branch = String::from_utf8(output.stdout)?.trim().to_string();
+        if !branch.is_empty() {
+            return Ok(branch);
+        }
+    }
+
+    for candidate in ["origin/main", "origin/master", "main", "master"] {
+        if git_ref_exists(repo_root, candidate)? {
+            return Ok(candidate.to_string());
+        }
+    }
+
+    anyhow::bail!("Failed to resolve default base branch for merged cleanup")
+}
+
+fn git_ref_exists(repo_root: &Path, reference: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("--quiet")
+        .arg(reference)
+        .current_dir(repo_root)
+        .output()?;
+
+    Ok(output.status.success())
+}
+
+pub fn is_branch_merged_into(repo_root: &Path, branch: &str, base: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .arg("merge-base")
+        .arg("--is-ancestor")
+        .arg(branch)
+        .arg(base)
+        .current_dir(repo_root)
+        .output()?;
+
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    if output.status.code() == Some(1) {
+        return Ok(false);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    anyhow::bail!("Failed to check merge status for '{}' against '{}': {}", branch, base, stderr);
+}
+
+pub fn run_command_in_dir(worktree_path: &Path, command: &[String]) -> Result<ExitStatus> {
+    if command.is_empty() {
+        anyhow::bail!("No command provided");
+    }
+
+    Ok(Command::new(&command[0])
+        .args(&command[1..])
+        .current_dir(worktree_path)
+        .status()?)
 }
 
 /// Add a new worktree
