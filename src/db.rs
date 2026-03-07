@@ -17,7 +17,8 @@ pub struct ProjectInfo {
 }
 
 fn get_db_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Failed to get home directory")?;
+    let messages = crate::i18n::Messages::new();
+    let home = dirs::home_dir().context(messages.failed_get_home_dir().to_string())?;
     let db_dir = home.join(".wt-manager");
     fs::create_dir_all(&db_dir)?;
     Ok(db_dir.join("db.json"))
@@ -43,12 +44,13 @@ pub fn save_db(db: &Database) -> Result<()> {
 }
 
 pub fn save_project(repo_path: &Path) -> Result<()> {
+    let messages = crate::i18n::Messages::new();
     let mut db = load_db()?;
     
     let repo_name = repo_path
         .file_name()
         .and_then(|n| n.to_str())
-        .context("Invalid repository path")?
+        .context(messages.invalid_repository_path().to_string())?
         .to_string();
 
     let key = repo_path.to_string_lossy().to_string();

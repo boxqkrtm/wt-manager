@@ -9,6 +9,7 @@ impl SetupManager {
     pub fn run_auto_setup(worktree_path: &Path) -> Result<()> {
         let mut commands = Vec::new();
         let mut shell_cmd = String::new();
+        let messages = crate::i18n::Messages::with_language(crate::i18n::Language::detect());
 
         // 1. Environment Setup (mise or nvm)
         if worktree_path.join("mise.toml").exists() || worktree_path.join(".mise.toml").exists() {
@@ -38,7 +39,7 @@ impl SetupManager {
         
         shell_cmd.push_str(&commands.join(" && "));
         
-        println!("Running automatic setup: {}", shell_cmd);
+        println!("{}: {}", messages.running_setup(), shell_cmd);
 
         let output = Command::new("zsh")
             .arg("-c")
@@ -48,23 +49,31 @@ impl SetupManager {
 
         match output {
             Ok(output) if output.status.success() => {
-                println!("✓ Setup completed successfully");
+                if commands.iter().any(|&c| c == "pnpm install") {
+                    println!("{}", messages.deps_installed());
+                } else {
+                    println!("{}", messages.setup_completed());
+                }
                 Ok(())
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                eprintln!("Warning: Setup completed with issues.");
+                eprintln!("{}", messages.setup_completed_with_issues());
                 if !stdout.trim().is_empty() {
-                    println!("Output: {}", stdout);
+                    println!("{}: {}", messages.output_label(), stdout);
                 }
                 if !stderr.trim().is_empty() {
-                    eprintln!("Error output: {}", stderr);
+                    eprintln!("{}: {}", messages.error_output_label(), stderr);
                 }
                 Ok(())
             }
             Err(e) => {
-                eprintln!("Warning: Could not run setup command: {}", e);
+                if commands.iter().any(|&c| c == "pnpm install") {
+                    eprintln!("{}: {}", messages.pnpm_install_warning(), e);
+                } else {
+                    eprintln!("{}: {}", messages.setup_command_error(), e);
+                }
                 Ok(())
             }
         }

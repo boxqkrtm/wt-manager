@@ -1,6 +1,14 @@
 use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
+
+// PR metadata display is intentionally capped to the first 100 open PRs.
+const GH_PR_LIST_LIMIT: &str = "100";
+const GH_PR_LOOKUP_THROTTLE_MS: u64 = 250;
 
 
 /// Find the main repository root (handles worktrees)
@@ -35,20 +43,21 @@ pub fn find_main_repo_root(start_path: &Path) -> Result<Option<PathBuf>> {
 
 /// List all worktrees for a repository
 pub fn list_worktrees(repo_root: &Path) -> Result<Vec<WorktreeInfo>> {
+    let messages = crate::i18n::Messages::new();
     let output = Command::new("git")
         .arg("worktree")
         .arg("list")
         .arg("--porcelain")
         .current_dir(repo_root)
         .output()
-        .context("Failed to list worktrees")?;
+        .context(messages.failed_list_worktrees().to_string())?;
 
     if !output.status.success() {
-        anyhow::bail!("git worktree list failed");
+        anyhow::bail!("{}", messages.failed_list_worktrees());
     }
 
     let stdout = String::from_utf8(output.stdout)?;
-    parse_worktree_list(&stdout)
+    parse_worktree_list(&stdout, repo_root)
 }
 
 #[derive(Debug, Clone)]
@@ -58,7 +67,55 @@ pub struct WorktreeInfo {
     pub is_main: bool,
 }
 
-fn parse_worktree_list(output: &str) -> Result<Vec<WorktreeInfo>> {
+#[derive(Debug, Clone)]
+pub struct PullRequestInfo {
+    pub number: u64,
+    pub title: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepositorySlug {
+    pub host: String,
+    pub owner: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepositoryOwnerResponse {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepositoryResponse {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestResponse {
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(rename = "headRepository")]
+    head_repository: Option<RepositoryResponse>,
+    #[serde(rename = "headRepositoryOwner")]
+    head_repository_owner: Option<RepositoryOwnerResponse>,
+    #[serde(rename = "isCrossRepository")]
+    is_cross_repository: bool,
+    number: u64,
+    title: String,
+}
+
+fn same_worktree_path(lhs: &Path, rhs: &Path) -> bool {
+    if lhs == rhs {
+        return true;
+    }
+
+    match (lhs.canonicalize(), rhs.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn parse_worktree_list(output: &str, repo_root: &Path) -> Result<Vec<WorktreeInfo>> {
     let mut worktrees = Vec::new();
     let mut current_path: Option<PathBuf> = None;
     let mut current_branch: Option<String> = None;
@@ -69,9 +126,9 @@ fn parse_worktree_list(output: &str) -> Result<Vec<WorktreeInfo>> {
             // Save previous worktree if exists
             if let (Some(path), Some(branch)) = (current_path.take(), current_branch.take()) {
                 worktrees.push(WorktreeInfo {
+                    is_main: is_main || same_worktree_path(&path, repo_root),
                     path,
                     branch,
-                    is_main,
                 });
             }
             
@@ -86,9 +143,9 @@ fn parse_worktree_list(output: &str) -> Result<Vec<WorktreeInfo>> {
             // End of worktree entry
             if let (Some(path), Some(branch)) = (current_path.take(), current_branch.take()) {
                 worktrees.push(WorktreeInfo {
+                    is_main: is_main || same_worktree_path(&path, repo_root),
                     path,
                     branch,
-                    is_main,
                 });
             }
         }
@@ -97,17 +154,200 @@ fn parse_worktree_list(output: &str) -> Result<Vec<WorktreeInfo>> {
     // Save last worktree if exists
     if let (Some(path), Some(branch)) = (current_path, current_branch) {
         worktrees.push(WorktreeInfo {
+            is_main: is_main || same_worktree_path(&path, repo_root),
             path,
             branch,
-            is_main,
         });
     }
 
     Ok(worktrees)
 }
 
+pub fn get_repository_slug(repo_root: &Path) -> Result<Option<RepositorySlug>> {
+    let output = Command::new("git")
+        .arg("remote")
+        .arg("get-url")
+        .arg("origin")
+        .current_dir(repo_root)
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let remote_url = String::from_utf8(output.stdout)?;
+    Ok(parse_repository_slug(remote_url.trim()))
+}
+
+fn parse_repository_slug(remote_url: &str) -> Option<RepositorySlug> {
+    let remote_url = remote_url.trim_end_matches(".git");
+    let (host, path) = if let Some(rest) = remote_url.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        (host, path)
+    } else if let Some((_, rest)) = remote_url.split_once("://") {
+        let (host, path) = rest.split_once('/')?;
+        (host, path)
+    } else {
+        return None;
+    };
+
+    let mut parts = path.split('/').filter(|segment| !segment.is_empty()).rev();
+    let name = parts.next()?.to_string();
+    let owner = parts.next()?.to_string();
+    let canonical_host = canonicalize_remote_host(host);
+
+    Some(RepositorySlug {
+        host: canonical_host,
+        owner,
+        name,
+    })
+}
+
+fn canonicalize_remote_host(host: &str) -> String {
+    let without_user = host.rsplit('@').next().unwrap_or(host);
+    let normalized = without_user.to_ascii_lowercase();
+
+    if normalized.starts_with('[') {
+        return normalized;
+    }
+
+    if let Some((hostname, port)) = normalized.rsplit_once(':') {
+        if !hostname.contains(':') && port.chars().all(|character| character.is_ascii_digit()) {
+            return hostname.to_string();
+        }
+    }
+
+    normalized
+}
+
+fn is_gh_available() -> bool {
+    Command::new("gh")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn is_same_repository_pr(pull_request: &PullRequestResponse, repository: &RepositorySlug) -> bool {
+    if pull_request.is_cross_repository {
+        return false;
+    }
+
+    let Some(head_repository) = pull_request.head_repository.as_ref() else {
+        return false;
+    };
+    let Some(head_repository_owner) = pull_request.head_repository_owner.as_ref() else {
+        return false;
+    };
+
+    head_repository.name == repository.name
+        && head_repository_owner.login.eq_ignore_ascii_case(&repository.owner)
+}
+
+pub fn get_open_prs_by_branch(repo_root: &Path) -> Result<HashMap<String, PullRequestInfo>> {
+    if !is_gh_available() {
+        return Ok(HashMap::new());
+    }
+    let Some(repository) = get_repository_slug(repo_root)? else {
+        return Ok(HashMap::new());
+    };
+
+    let output = Command::new("gh")
+        .arg("pr")
+        .arg("list")
+        .arg("--json")
+        .arg("number,title,headRefName,headRepository,headRepositoryOwner,isCrossRepository")
+        .arg("--state")
+        .arg("open")
+        .arg("--limit")
+        .arg(GH_PR_LIST_LIMIT)
+        .current_dir(repo_root)
+        .output()
+        .context("Failed to execute gh command")?;
+
+    if !output.status.success() {
+        return Ok(HashMap::new());
+    }
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let parsed: Vec<PullRequestResponse> = serde_json::from_str(&stdout)?;
+    let pull_requests = parsed
+        .into_iter()
+        .filter(|pull_request| is_same_repository_pr(pull_request, &repository))
+        .map(|pull_request| {
+            (
+                pull_request.head_ref_name,
+                PullRequestInfo {
+                    number: pull_request.number,
+                    title: pull_request.title,
+                },
+            )
+        })
+        .collect();
+
+    Ok(pull_requests)
+}
+
+pub fn get_open_prs_for_branches(
+    repo_root: &Path,
+    branches: &[String],
+) -> Result<HashMap<String, PullRequestInfo>> {
+    if !is_gh_available() {
+        return Ok(HashMap::new());
+    }
+    let Some(repository) = get_repository_slug(repo_root)? else {
+        return Ok(HashMap::new());
+    };
+
+    let mut pull_requests = HashMap::new();
+
+    for (index, branch) in branches.iter().enumerate() {
+        if index > 0 {
+            thread::sleep(Duration::from_millis(GH_PR_LOOKUP_THROTTLE_MS));
+        }
+
+        let output = Command::new("gh")
+            .arg("pr")
+            .arg("list")
+            .arg("--json")
+            .arg("number,title,headRefName,headRepository,headRepositoryOwner,isCrossRepository")
+            .arg("--head")
+            .arg(branch)
+            .arg("--state")
+            .arg("open")
+            .arg("--limit")
+            .arg(GH_PR_LIST_LIMIT)
+            .current_dir(repo_root)
+            .output()
+            .context("Failed to execute gh command")?;
+
+        if !output.status.success() {
+            continue;
+        }
+
+        let stdout = String::from_utf8(output.stdout)?;
+        let parsed: Vec<PullRequestResponse> = serde_json::from_str(&stdout)?;
+
+        if let Some(pull_request) = parsed
+            .into_iter()
+            .find(|pull_request| is_same_repository_pr(pull_request, &repository))
+        {
+            pull_requests.insert(
+                branch.clone(),
+                PullRequestInfo {
+                    number: pull_request.number,
+                    title: pull_request.title,
+                },
+            );
+        }
+    }
+
+    Ok(pull_requests)
+}
+
 /// Add a new worktree
 pub fn add_worktree(repo_root: &Path, worktree_path: &Path, branch: &str, create_branch: bool) -> Result<()> {
+    let messages = crate::i18n::Messages::new();
     let mut cmd = Command::new("git");
     cmd.arg("worktree")
         .arg("add");
@@ -126,7 +366,7 @@ pub fn add_worktree(repo_root: &Path, worktree_path: &Path, branch: &str, create
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to add worktree: {}", stderr);
+        anyhow::bail!("{}: {}", messages.failed_add_worktree(), stderr);
     }
 
     Ok(())
@@ -135,6 +375,7 @@ pub fn add_worktree(repo_root: &Path, worktree_path: &Path, branch: &str, create
 /// Remove a worktree
 /// Returns an error if the worktree has uncommitted changes
 pub fn remove_worktree(repo_root: &Path, worktree_path: &Path, force: bool) -> Result<()> {
+    let messages = crate::i18n::Messages::new();
     let mut cmd = Command::new("git");
 
     cmd.arg("worktree")
@@ -151,7 +392,7 @@ pub fn remove_worktree(repo_root: &Path, worktree_path: &Path, force: bool) -> R
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to remove worktree: {}", stderr);
+        anyhow::bail!("{}: {}", messages.failed_remove_worktree(), stderr);
     }
 
     Ok(())
