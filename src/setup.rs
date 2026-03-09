@@ -37,7 +37,10 @@ impl SetupManager {
             let path = Path::new(relative_path);
             let is_safe_relative = !path.is_absolute()
                 && path.components().all(|component| {
-                    !matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+                    !matches!(
+                        component,
+                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                    )
                 });
 
             if !is_safe_relative {
@@ -53,7 +56,10 @@ impl SetupManager {
 
             let destination = worktree_path.join(relative_path);
             if destination.exists() {
-                eprintln!("Warning: copy destination already exists '{}'", relative_path);
+                eprintln!(
+                    "Warning: copy destination already exists '{}'",
+                    relative_path
+                );
                 continue;
             }
 

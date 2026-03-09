@@ -1,8 +1,8 @@
 mod db;
 mod git;
 mod i18n;
-mod tui;
 mod setup;
+mod tui;
 mod worktree;
 
 use anyhow::Result;
@@ -37,10 +37,7 @@ fn main() -> Result<()> {
     ctrlc::set_handler(|| {
         // Clean up terminal state if needed
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
         std::process::exit(0);
     })
     .expect(messages.ctrlc_handler_error());
@@ -107,7 +104,11 @@ enum Commands {
     /// Delete a worktree
     Delete {
         branch: String,
-        #[arg(short, long, help = "Force delete (use when normal delete fails due to uncommitted changes).")]
+        #[arg(
+            short,
+            long,
+            help = "Force delete (use when normal delete fails due to uncommitted changes)."
+        )]
         force: bool,
     },
     /// Remove worktrees whose tracking branches were deleted from remote or already merged
@@ -149,7 +150,9 @@ enum Commands {
 #[derive(Subcommand, Debug)]
 enum WorktreeAliasCommands {
     List,
-    Switch { branch: String },
+    Switch {
+        branch: String,
+    },
     Run {
         branch: String,
         #[arg(required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
@@ -488,7 +491,11 @@ fn list_worktrees(repo_root: &Path) -> Result<()> {
 
     println!("\n{}", messages.select_or_create_worktree());
     for wt in worktrees {
-        let marker = if wt.is_main { messages.main_marker() } else { "" };
+        let marker = if wt.is_main {
+            messages.main_marker()
+        } else {
+            ""
+        };
         if let Some(pr) = pull_requests.get(&wt.branch) {
             println!("  {}{} #{} {}", wt.branch, marker, pr.number, pr.title);
         } else {
@@ -552,9 +559,7 @@ fn remote_ref_exists(repo_root: &Path, upstream: &str) -> Result<bool> {
         }
 
         let stderr = String::from_utf8(status.stderr)?;
-        let reason = messages
-            .failed_verify_remote_ref()
-            .replace("{}", upstream);
+        let reason = messages.failed_verify_remote_ref().replace("{}", upstream);
         anyhow::bail!("{} {}", reason, stderr.trim());
     }
 
@@ -614,10 +619,15 @@ fn clean_stale_worktrees(
                 }
 
                 if !remote_ref_exists(repo_root, &value)? {
-                    stale_worktrees.push((wt, format!(
-                        "{}",
-                        messages.stale_upstream_missing_reason().replace("{}", &value)
-                    )));
+                    stale_worktrees.push((
+                        wt,
+                        format!(
+                            "{}",
+                            messages
+                                .stale_upstream_missing_reason()
+                                .replace("{}", &value)
+                        ),
+                    ));
                 }
             }
             None => {
@@ -633,7 +643,12 @@ fn clean_stale_worktrees(
         return Ok(());
     }
 
-    println!("{}", messages.found_stale_worktrees().replace("{}", &stale_worktrees.len().to_string()));
+    println!(
+        "{}",
+        messages
+            .found_stale_worktrees()
+            .replace("{}", &stale_worktrees.len().to_string())
+    );
     for (wt, reason) in &stale_worktrees {
         println!("  {} ({})", wt.branch, reason);
         println!("    {}", wt.path.display());
@@ -659,8 +674,8 @@ fn clean_stale_worktrees(
                         "{} {}",
                         messages.force_delete_command(),
                         format!("wt delete {} --force", wt.branch)
-                );
-    }
+                    );
+                }
             }
         }
     }
@@ -676,7 +691,11 @@ fn clean_merged_worktrees(
 ) -> Result<()> {
     let messages = i18n::Messages::new();
     let base_branch = git::resolve_merge_base_branch(repo_root, base)?;
-    let base_short = base_branch.rsplit('/').next().unwrap_or(&base_branch).to_string();
+    let base_short = base_branch
+        .rsplit('/')
+        .next()
+        .unwrap_or(&base_branch)
+        .to_string();
     let worktrees = git::list_worktrees(repo_root)?;
 
     let mut merged_worktrees = Vec::new();
@@ -762,7 +781,8 @@ fn init_shell_integration() -> Result<()> {
     let mut updated_any = false;
 
     for rc_path in rc_targets {
-        if !rc_path.exists() && rc_path.file_name().and_then(|name| name.to_str()) != Some(".zshrc") {
+        if !rc_path.exists() && rc_path.file_name().and_then(|name| name.to_str()) != Some(".zshrc")
+        {
             continue;
         }
 

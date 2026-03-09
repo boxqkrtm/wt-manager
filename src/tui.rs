@@ -4,11 +4,11 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Alignment},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
@@ -17,12 +17,11 @@ use ratatui::{
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{self, Sender};
+use std::thread;
+use std::time::Duration;
 
 use crate::{db, git, worktree};
-
-const WORKTREE_PR_PREVIEW_LIMIT: usize = 6;
-const WORKTREE_PR_SEARCH_DEBOUNCE_MS: u64 = 300;
 
 pub fn show_project_selector() -> Result<()> {
     let messages = crate::i18n::Messages::new();
@@ -52,7 +51,7 @@ pub fn show_project_selector() -> Result<()> {
                     matcher.fuzzy_match(item, &input).map(|score| (idx, score))
                 })
                 .collect();
-            
+
             matches.sort_by(|a, b| b.1.cmp(&a.1));
 
             if let Some((idx, _)) = matches.first() {
@@ -60,7 +59,7 @@ pub fn show_project_selector() -> Result<()> {
                 // Navigate directly to the project root
                 println!("\n{} {}", messages.switching_to_project(), project.name);
                 println!("  cd {}", project.path.display());
-                
+
                 crate::setup::SetupManager::run_auto_setup(&project.path)?;
             }
         }
@@ -74,8 +73,7 @@ pub fn show_project_selector() -> Result<()> {
 
 pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
     let messages = crate::i18n::Messages::new();
-    let worktrees = git::list_worktrees(repo_root)?;
-    let action = run_worktree_selector(repo_root, &worktrees, &messages)?;
+    let (action, worktrees) = run_worktree_selector(repo_root, &messages)?;
 
     match action {
         SelectorAction::Select(input) => {
@@ -96,9 +94,9 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                 worktree::handle_worktree(repo_root, &branch_name)?;
             } else {
                 // Check for exact match (case-insensitive)
-                let exact_match = worktrees.iter().find(|wt| 
-                    wt.branch.eq_ignore_ascii_case(&branch_name)
-                );
+                let exact_match = worktrees
+                    .iter()
+                    .find(|wt| wt.branch.eq_ignore_ascii_case(&branch_name));
 
                 if let Some(wt) = exact_match {
                     // Existing worktree - switch to it
@@ -116,9 +114,9 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
         }
         SelectorAction::Delete(branch_name) => {
             // Find the worktree to delete
-            let worktree_to_delete = worktrees.iter().find(|wt| 
-                wt.branch.eq_ignore_ascii_case(&branch_name)
-            );
+            let worktree_to_delete = worktrees
+                .iter()
+                .find(|wt| wt.branch.eq_ignore_ascii_case(&branch_name));
 
             if let Some(wt) = worktree_to_delete {
                 if wt.is_main {
@@ -158,6 +156,24 @@ struct InputState {
     input: String,
     cursor_index: usize,
     selected_index: usize,
+}
+
+enum BackgroundMessage {
+    WorktreesLoaded(Result<Vec<git::WorktreeInfo>, String>),
+    PullRequestsLoaded(Result<HashMap<String, git::PullRequestInfo>, String>),
+}
+
+enum WorktreeLoadState {
+    Loading,
+    Loaded,
+    Failed(String),
+}
+
+enum PullRequestLoadState {
+    NotStarted,
+    Loading,
+    Loaded,
+    Failed,
 }
 
 fn byte_index(value: &str, char_index: usize) -> usize {
@@ -207,6 +223,81 @@ fn clamp_selected_index(selected_index: &mut usize, visible_len: usize) {
     }
 }
 
+fn selection_highlight_style() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn spawn_worktree_loader(repo_root: &Path, sender: Sender<BackgroundMessage>) {
+    let repo_root = repo_root.to_path_buf();
+    thread::spawn(move || {
+        let result = git::list_worktrees(&repo_root).map_err(|error| error.to_string());
+        let _ = sender.send(BackgroundMessage::WorktreesLoaded(result));
+    });
+}
+
+fn spawn_pull_request_loader(repo_root: &Path, sender: Sender<BackgroundMessage>) {
+    let repo_root = repo_root.to_path_buf();
+    thread::spawn(move || {
+        let result = git::get_open_prs_by_branch(&repo_root).map_err(|error| error.to_string());
+        let _ = sender.send(BackgroundMessage::PullRequestsLoaded(result));
+    });
+}
+
+fn filter_worktrees<'a>(
+    worktrees: &'a [git::WorktreeInfo],
+    input: &str,
+    matcher: &SkimMatcherV2,
+    messages: &crate::i18n::Messages,
+    pr_cache: &HashMap<String, git::PullRequestInfo>,
+) -> Vec<(&'a git::WorktreeInfo, i64)> {
+    if input.is_empty() {
+        return worktrees.iter().map(|worktree| (worktree, 0)).collect();
+    }
+
+    let mut matches: Vec<(&git::WorktreeInfo, i64)> = worktrees
+        .iter()
+        .filter_map(|worktree| {
+            let item = format_worktree_item(worktree, messages, pr_cache.get(&worktree.branch));
+            matcher
+                .fuzzy_match(&item, input)
+                .map(|score| (worktree, score))
+        })
+        .collect();
+    matches.sort_by(|left, right| right.1.cmp(&left.1));
+    matches
+}
+
+fn selected_worktree_branch(
+    worktrees: &[git::WorktreeInfo],
+    state: &InputState,
+    matcher: &SkimMatcherV2,
+    messages: &crate::i18n::Messages,
+    pr_cache: &HashMap<String, git::PullRequestInfo>,
+) -> Option<String> {
+    filter_worktrees(worktrees, &state.input, matcher, messages, pr_cache)
+        .get(state.selected_index)
+        .map(|(worktree, _)| worktree.branch.clone())
+}
+
+fn worktree_status_text(
+    messages: &crate::i18n::Messages,
+    worktree_state: &WorktreeLoadState,
+    pr_state: &PullRequestLoadState,
+) -> Option<String> {
+    match worktree_state {
+        WorktreeLoadState::Loading => Some(messages.loading_worktrees().to_string()),
+        WorktreeLoadState::Failed(_) => Some(messages.failed_list_worktrees().to_string()),
+        WorktreeLoadState::Loaded => match pr_state {
+            PullRequestLoadState::Loading => Some(messages.loading_pull_requests().to_string()),
+            PullRequestLoadState::Failed => Some(messages.pr_preview_unavailable().to_string()),
+            PullRequestLoadState::NotStarted | PullRequestLoadState::Loaded => None,
+        },
+    }
+}
+
 fn format_worktree_item(
     worktree: &git::WorktreeInfo,
     messages: &crate::i18n::Messages,
@@ -227,67 +318,79 @@ fn format_worktree_item(
 
 fn run_worktree_selector(
     repo_root: &Path,
-    worktrees: &[git::WorktreeInfo],
     messages: &crate::i18n::Messages,
-) -> Result<SelectorAction> {
+) -> Result<(SelectorAction, Vec<git::WorktreeInfo>)> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let (background_tx, background_rx) = mpsc::channel();
+    spawn_worktree_loader(repo_root, background_tx.clone());
+
     let mut state = InputState::default();
     let matcher = SkimMatcherV2::default();
-    let mut pr_cache: HashMap<String, Option<git::PullRequestInfo>> = HashMap::new();
-    let mut last_input_change =
-        Instant::now() - Duration::from_millis(WORKTREE_PR_SEARCH_DEBOUNCE_MS);
+    let mut worktrees = Vec::new();
+    let mut worktree_state = WorktreeLoadState::Loading;
+    let mut pr_cache: HashMap<String, git::PullRequestInfo> = HashMap::new();
+    let mut pr_state = PullRequestLoadState::NotStarted;
 
     let result = loop {
-        let filtered_worktrees: Vec<(&git::WorktreeInfo, i64)> = if state.input.is_empty() {
-            worktrees.iter().map(|worktree| (worktree, 0)).collect()
-        } else {
-            let mut matches: Vec<(&git::WorktreeInfo, i64)> = worktrees
-                .iter()
-                .filter_map(|worktree| {
-                    let item = format_worktree_item(
-                        worktree,
-                        messages,
-                        pr_cache
-                            .get(&worktree.branch)
-                            .and_then(|pull_request| pull_request.as_ref()),
-                    );
-                    matcher
-                        .fuzzy_match(&item, &state.input)
-                        .map(|score| (worktree, score))
-                })
-                .collect();
-            matches.sort_by(|left, right| right.1.cmp(&left.1));
-            matches
+        let selected_branch_before_update = match &worktree_state {
+            WorktreeLoadState::Loaded => {
+                selected_worktree_branch(&worktrees, &state, &matcher, messages, &pr_cache)
+            }
+            WorktreeLoadState::Loading | WorktreeLoadState::Failed(_) => None,
         };
-        let visible_len = filtered_worktrees.len().min(10);
-        clamp_selected_index(&mut state.selected_index, visible_len);
+        let mut should_restore_selection = false;
 
-        if last_input_change.elapsed() >= Duration::from_millis(WORKTREE_PR_SEARCH_DEBOUNCE_MS) {
-            let missing_branches: Vec<String> = filtered_worktrees
-                .iter()
-                .take(WORKTREE_PR_PREVIEW_LIMIT)
-                .filter_map(|(worktree, _)| {
-                    if pr_cache.contains_key(&worktree.branch) {
-                        None
-                    } else {
-                        Some(worktree.branch.clone())
+        while let Ok(message) = background_rx.try_recv() {
+            match message {
+                BackgroundMessage::WorktreesLoaded(Ok(loaded_worktrees)) => {
+                    worktrees = loaded_worktrees;
+                    worktree_state = WorktreeLoadState::Loaded;
+                    should_restore_selection = true;
+
+                    if matches!(&pr_state, PullRequestLoadState::NotStarted) {
+                        pr_state = PullRequestLoadState::Loading;
+                        spawn_pull_request_loader(repo_root, background_tx.clone());
                     }
-                })
-                .collect();
-
-            if !missing_branches.is_empty() {
-                let fetched_pull_requests =
-                    git::get_open_prs_for_branches(repo_root, &missing_branches)?;
-                for branch in missing_branches {
-                    pr_cache.insert(branch.clone(), fetched_pull_requests.get(&branch).cloned());
+                }
+                BackgroundMessage::WorktreesLoaded(Err(error)) => {
+                    worktree_state = WorktreeLoadState::Failed(error);
+                }
+                BackgroundMessage::PullRequestsLoaded(Ok(loaded_pull_requests)) => {
+                    pr_cache = loaded_pull_requests;
+                    pr_state = PullRequestLoadState::Loaded;
+                    should_restore_selection = true;
+                }
+                BackgroundMessage::PullRequestsLoaded(Err(_error)) => {
+                    pr_state = PullRequestLoadState::Failed;
                 }
             }
         }
+
+        let filtered_worktrees = match &worktree_state {
+            WorktreeLoadState::Loaded => {
+                filter_worktrees(&worktrees, &state.input, &matcher, messages, &pr_cache)
+            }
+            WorktreeLoadState::Loading | WorktreeLoadState::Failed(_) => Vec::new(),
+        };
+
+        if should_restore_selection {
+            if let Some(selected_branch) = selected_branch_before_update {
+                if let Some(index) = filtered_worktrees
+                    .iter()
+                    .position(|(worktree, _)| worktree.branch == selected_branch)
+                {
+                    state.selected_index = index;
+                }
+            }
+        }
+
+        let visible_len = filtered_worktrees.len().min(10);
+        clamp_selected_index(&mut state.selected_index, visible_len);
 
         terminal.draw(|f| {
             let chunks = Layout::default()
@@ -306,7 +409,11 @@ fn run_worktree_selector(
                 .style(Style::default().fg(Color::Cyan));
             let title_text = Paragraph::new(messages.select_or_create_worktree())
                 .block(title_block)
-                .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD));
+                .style(
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                );
             f.render_widget(title_text, chunks[0]);
 
             let input_block = Block::default()
@@ -319,25 +426,40 @@ fn run_worktree_selector(
             f.render_widget(input_text, chunks[1]);
             f.set_cursor_position((chunks[1].x + 1 + state.cursor_index as u16, chunks[1].y + 1));
 
-            let list_items: Vec<ListItem> = if filtered_worktrees.is_empty() && !state.input.is_empty() {
-                vec![ListItem::new(Line::from(vec![Span::styled(
-                    messages.create_new_prefix().replace("{}", &state.input),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                )]))]
-            } else {
-                filtered_worktrees
+            let list_items: Vec<ListItem> = match &worktree_state {
+                WorktreeLoadState::Loading => vec![ListItem::new(Line::from(vec![Span::styled(
+                    messages.loading_worktrees(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::ITALIC),
+                )]))],
+                WorktreeLoadState::Failed(error) => {
+                    vec![ListItem::new(Line::from(vec![Span::styled(
+                        format!("{}: {}", messages.failed_list_worktrees(), error),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )]))]
+                }
+                WorktreeLoadState::Loaded
+                    if filtered_worktrees.is_empty() && !state.input.is_empty() =>
+                {
+                    vec![ListItem::new(Line::from(vec![Span::styled(
+                        messages.create_new_prefix().replace("{}", &state.input),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    )]))]
+                }
+                WorktreeLoadState::Loaded => filtered_worktrees
                     .iter()
                     .take(10)
                     .map(|(worktree, _)| {
                         ListItem::new(Line::from(vec![Span::raw(format_worktree_item(
                             worktree,
                             messages,
-                            pr_cache
-                                .get(&worktree.branch)
-                                .and_then(|pull_request| pull_request.as_ref()),
+                            pr_cache.get(&worktree.branch),
                         ))]))
                     })
-                    .collect()
+                    .collect(),
             };
 
             let list = List::new(list_items)
@@ -346,7 +468,9 @@ fn run_worktree_selector(
                     messages.matches_label(),
                     filtered_worktrees.len()
                 )))
-                .style(Style::default().fg(Color::White));
+                .style(Style::default().fg(Color::White))
+                .highlight_style(selection_highlight_style())
+                .highlight_symbol("> ");
             let mut list_state = ListState::default();
             if visible_len > 0 {
                 list_state.select(Some(state.selected_index));
@@ -356,8 +480,11 @@ fn run_worktree_selector(
             let has_exact_match = worktrees
                 .iter()
                 .any(|worktree| worktree.branch.eq_ignore_ascii_case(&state.input));
+            let status_text = worktree_status_text(messages, &worktree_state, &pr_state);
 
-            let help_text = if state.input.is_empty() {
+            let base_help_text = if !matches!(&worktree_state, WorktreeLoadState::Loaded) {
+                format!("{} | {}", messages.help_search(), messages.help_cancel())
+            } else if state.input.is_empty() {
                 format!(
                     "{} | {} | {} | {} | {} {} | {} | {}",
                     messages.help_search(),
@@ -399,6 +526,10 @@ fn run_worktree_selector(
                     "Arrows"
                 )
             };
+            let help_text = match status_text {
+                Some(status_text) => format!("{} | {}", base_help_text, status_text),
+                None => base_help_text,
+            };
 
             let help = Paragraph::new(help_text)
                 .block(Block::default().borders(Borders::ALL))
@@ -413,17 +544,19 @@ fn run_worktree_selector(
 
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
+                let worktrees_loaded = matches!(&worktree_state, WorktreeLoadState::Loaded);
+
                 match key.code {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         break SelectorAction::Cancel;
                     }
                     KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if !state.input.is_empty() {
+                        if worktrees_loaded && !state.input.is_empty() {
                             break SelectorAction::Select(format!("__CREATE_NEW__{}", state.input));
                         }
                     }
                     KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if !state.input.is_empty() {
+                        if worktrees_loaded && !state.input.is_empty() {
                             if let Some(worktree) = worktrees
                                 .iter()
                                 .find(|worktree| worktree.branch.eq_ignore_ascii_case(&state.input))
@@ -435,17 +568,14 @@ fn run_worktree_selector(
                     KeyCode::Esc => break SelectorAction::Cancel,
                     KeyCode::Char(character) => {
                         insert_char(&mut state, character);
-                        last_input_change = Instant::now();
                         state.selected_index = 0;
                     }
                     KeyCode::Backspace => {
                         backspace_char(&mut state);
-                        last_input_change = Instant::now();
                         state.selected_index = 0;
                     }
                     KeyCode::Delete => {
                         delete_char(&mut state);
-                        last_input_change = Instant::now();
                         state.selected_index = 0;
                     }
                     KeyCode::Left => {
@@ -469,15 +599,22 @@ fn run_worktree_selector(
                         }
                     }
                     KeyCode::Tab => {
-                        if let Some((worktree, _)) = filtered_worktrees.get(state.selected_index) {
-                            state.input = worktree.branch.clone();
-                            state.cursor_index = char_len(&state.input);
-                            last_input_change = Instant::now();
+                        if worktrees_loaded {
+                            if let Some((worktree, _)) =
+                                filtered_worktrees.get(state.selected_index)
+                            {
+                                state.input = worktree.branch.clone();
+                                state.cursor_index = char_len(&state.input);
+                            }
                         }
                     }
                     KeyCode::Enter => {
-                        if let Some((worktree, _)) = filtered_worktrees.get(state.selected_index) {
-                            break SelectorAction::Select(worktree.branch.clone());
+                        if worktrees_loaded {
+                            if let Some((worktree, _)) =
+                                filtered_worktrees.get(state.selected_index)
+                            {
+                                break SelectorAction::Select(worktree.branch.clone());
+                            }
                         }
                     }
                     _ => {}
@@ -490,10 +627,16 @@ fn run_worktree_selector(
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
-    Ok(result)
+    Ok((result, worktrees))
 }
 
-fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_delete: bool, messages: &crate::i18n::Messages) -> Result<SelectorAction> {
+fn run_input_selector(
+    title: &str,
+    items: &[String],
+    allow_create: bool,
+    allow_delete: bool,
+    messages: &crate::i18n::Messages,
+) -> Result<SelectorAction> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -510,7 +653,9 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
             let mut matches: Vec<(String, i64)> = items
                 .iter()
                 .filter_map(|item| {
-                    matcher.fuzzy_match(item, &state.input).map(|score| (item.clone(), score))
+                    matcher
+                        .fuzzy_match(item, &state.input)
+                        .map(|score| (item.clone(), score))
                 })
                 .collect();
             matches.sort_by(|a, b| b.1.cmp(&a.1));
@@ -535,9 +680,11 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
             let title_block = Block::default()
                 .borders(Borders::ALL)
                 .style(Style::default().fg(Color::Cyan));
-            let title_text = Paragraph::new(title)
-                .block(title_block)
-                .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD));
+            let title_text = Paragraph::new(title).block(title_block).style(
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            );
             f.render_widget(title_text, chunks[0]);
 
             // Input field
@@ -552,30 +699,31 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
             f.set_cursor_position((chunks[1].x + 1 + state.cursor_index as u16, chunks[1].y + 1));
 
             // Filtered list
-            let list_items: Vec<ListItem> = if filtered_items.is_empty() && !state.input.is_empty() {
-                vec![ListItem::new(Line::from(vec![
-                    Span::styled(
-                        messages.create_new_prefix().replace("{}", &state.input),
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                    )
-                ]))]
+            let list_items: Vec<ListItem> = if filtered_items.is_empty() && !state.input.is_empty()
+            {
+                vec![ListItem::new(Line::from(vec![Span::styled(
+                    messages.create_new_prefix().replace("{}", &state.input),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )]))]
             } else {
                 filtered_items
                     .iter()
                     .take(10)
-                    .map(|(item, _)| {
-                        ListItem::new(Line::from(vec![Span::raw(item)]))
-                    })
+                    .map(|(item, _)| ListItem::new(Line::from(vec![Span::raw(item)])))
                     .collect()
             };
 
             let list = List::new(list_items)
-                    .block(Block::default().borders(Borders::ALL).title(format!(
-                        "{} ({})",
-                        messages.matches_label(),
-                        filtered_items.len()
-                    )))
-                .style(Style::default().fg(Color::White));
+                .block(Block::default().borders(Borders::ALL).title(format!(
+                    "{} ({})",
+                    messages.matches_label(),
+                    filtered_items.len()
+                )))
+                .style(Style::default().fg(Color::White))
+                .highlight_style(selection_highlight_style())
+                .highlight_symbol("> ");
             let mut list_state = ListState::default();
             if visible_len > 0 {
                 list_state.select(Some(state.selected_index));
@@ -591,37 +739,88 @@ fn run_input_selector(title: &str, items: &[String], allow_create: bool, allow_d
                 });
 
                 if state.input.is_empty() {
-                    format!("{} | {} | {} | {} | {} {} | {} | {}", 
-                        messages.help_search(), messages.help_tab(), messages.help_enter_select(), 
-                        messages.help_ctrl_b_create(), messages.help_ctrl_x_delete(), messages.help_exact_match(), messages.help_cancel(), "Arrows")
+                    format!(
+                        "{} | {} | {} | {} | {} {} | {} | {}",
+                        messages.help_search(),
+                        messages.help_tab(),
+                        messages.help_enter_select(),
+                        messages.help_ctrl_b_create(),
+                        messages.help_ctrl_x_delete(),
+                        messages.help_exact_match(),
+                        messages.help_cancel(),
+                        "Arrows"
+                    )
                 } else if filtered_items.is_empty() {
-                    format!("{} | {} | {} | {}", messages.help_create_new_branch(), messages.help_backspace(), messages.help_cancel(), "Arrows")
+                    format!(
+                        "{} | {} | {} | {}",
+                        messages.help_create_new_branch(),
+                        messages.help_backspace(),
+                        messages.help_cancel(),
+                        "Arrows"
+                    )
                 } else if has_exact_match {
-                    format!("{} | {} | {} | {} | {} | {} | {}", 
-                        messages.help_tab(), messages.help_enter_select(), messages.help_ctrl_b_create(), 
-                        messages.help_ctrl_x_delete(), messages.help_backspace(), messages.help_cancel(), "Arrows")
+                    format!(
+                        "{} | {} | {} | {} | {} | {} | {}",
+                        messages.help_tab(),
+                        messages.help_enter_select(),
+                        messages.help_ctrl_b_create(),
+                        messages.help_ctrl_x_delete(),
+                        messages.help_backspace(),
+                        messages.help_cancel(),
+                        "Arrows"
+                    )
                 } else {
-                     format!("{} | {} | {} | {} | {} | {}", 
-                        messages.help_tab(), messages.help_enter_select(), messages.help_ctrl_b_create(), 
-                        messages.help_backspace(), messages.help_cancel(), "Arrows")
+                    format!(
+                        "{} | {} | {} | {} | {} | {}",
+                        messages.help_tab(),
+                        messages.help_enter_select(),
+                        messages.help_ctrl_b_create(),
+                        messages.help_backspace(),
+                        messages.help_cancel(),
+                        "Arrows"
+                    )
                 }
             } else if allow_create {
                 if state.input.is_empty() {
-                     format!("{} | {} | {} | {} | {} | {}", 
-                        messages.help_search(), messages.help_tab(), messages.help_enter_select(), 
-                        messages.help_ctrl_b_create(), messages.help_cancel(), "Arrows")
+                    format!(
+                        "{} | {} | {} | {} | {} | {}",
+                        messages.help_search(),
+                        messages.help_tab(),
+                        messages.help_enter_select(),
+                        messages.help_ctrl_b_create(),
+                        messages.help_cancel(),
+                        "Arrows"
+                    )
                 } else if filtered_items.is_empty() {
-                    format!("{} | {} | {} | {}", messages.help_create_new_branch(), messages.help_backspace(), messages.help_cancel(), "Arrows")
+                    format!(
+                        "{} | {} | {} | {}",
+                        messages.help_create_new_branch(),
+                        messages.help_backspace(),
+                        messages.help_cancel(),
+                        "Arrows"
+                    )
                 } else {
-                     format!("{} | {} | {} | {} | {} | {}", 
-                        messages.help_tab(), messages.help_enter_select(), messages.help_ctrl_b_create(), 
-                        messages.help_backspace(), messages.help_cancel(), "Arrows")
+                    format!(
+                        "{} | {} | {} | {} | {} | {}",
+                        messages.help_tab(),
+                        messages.help_enter_select(),
+                        messages.help_ctrl_b_create(),
+                        messages.help_backspace(),
+                        messages.help_cancel(),
+                        "Arrows"
+                    )
                 }
             } else {
-                 format!("{} | {} | {} | {} | {}", 
-                    messages.help_search(), messages.help_tab(), messages.help_enter_select(), messages.help_cancel(), "Arrows")
+                format!(
+                    "{} | {} | {} | {} | {}",
+                    messages.help_search(),
+                    messages.help_tab(),
+                    messages.help_enter_select(),
+                    messages.help_cancel(),
+                    "Arrows"
+                )
             };
-            
+
             let help = Paragraph::new(help_text)
                 .block(Block::default().borders(Borders::ALL))
                 .style(Style::default().fg(Color::Gray))

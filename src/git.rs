@@ -3,13 +3,9 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::thread;
-use std::time::Duration;
 
 // PR metadata display is intentionally capped to the first 100 open PRs.
 const GH_PR_LIST_LIMIT: &str = "100";
-const GH_PR_LOOKUP_THROTTLE_MS: u64 = 250;
-
 
 /// Find the main repository root (handles worktrees)
 /// If in a worktree, returns the main repository root
@@ -27,12 +23,10 @@ pub fn find_main_repo_root(start_path: &Path) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
 
-    let git_common_dir = String::from_utf8(output.stdout)?
-        .trim()
-        .to_string();
-    
+    let git_common_dir = String::from_utf8(output.stdout)?.trim().to_string();
+
     let git_common_path = PathBuf::from(git_common_dir);
-    
+
     // The parent of .git directory is the main repo root
     if let Some(parent) = git_common_path.parent() {
         Ok(Some(parent.to_path_buf()))
@@ -131,7 +125,7 @@ fn parse_worktree_list(output: &str, repo_root: &Path) -> Result<Vec<WorktreeInf
                     branch,
                 });
             }
-            
+
             current_path = Some(PathBuf::from(line.trim_start_matches("worktree ")));
             is_main = false;
         } else if line.starts_with("branch ") {
@@ -241,7 +235,9 @@ fn is_same_repository_pr(pull_request: &PullRequestResponse, repository: &Reposi
     };
 
     head_repository.name == repository.name
-        && head_repository_owner.login.eq_ignore_ascii_case(&repository.owner)
+        && head_repository_owner
+            .login
+            .eq_ignore_ascii_case(&repository.owner)
 }
 
 pub fn get_open_prs_by_branch(repo_root: &Path) -> Result<HashMap<String, PullRequestInfo>> {
@@ -284,63 +280,6 @@ pub fn get_open_prs_by_branch(repo_root: &Path) -> Result<HashMap<String, PullRe
             )
         })
         .collect();
-
-    Ok(pull_requests)
-}
-
-pub fn get_open_prs_for_branches(
-    repo_root: &Path,
-    branches: &[String],
-) -> Result<HashMap<String, PullRequestInfo>> {
-    if !is_gh_available() {
-        return Ok(HashMap::new());
-    }
-    let Some(repository) = get_repository_slug(repo_root)? else {
-        return Ok(HashMap::new());
-    };
-
-    let mut pull_requests = HashMap::new();
-
-    for (index, branch) in branches.iter().enumerate() {
-        if index > 0 {
-            thread::sleep(Duration::from_millis(GH_PR_LOOKUP_THROTTLE_MS));
-        }
-
-        let output = Command::new("gh")
-            .arg("pr")
-            .arg("list")
-            .arg("--json")
-            .arg("number,title,headRefName,headRepository,headRepositoryOwner,isCrossRepository")
-            .arg("--head")
-            .arg(branch)
-            .arg("--state")
-            .arg("open")
-            .arg("--limit")
-            .arg(GH_PR_LIST_LIMIT)
-            .current_dir(repo_root)
-            .output()
-            .context("Failed to execute gh command")?;
-
-        if !output.status.success() {
-            continue;
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let parsed: Vec<PullRequestResponse> = serde_json::from_str(&stdout)?;
-
-        if let Some(pull_request) = parsed
-            .into_iter()
-            .find(|pull_request| is_same_repository_pr(pull_request, &repository))
-        {
-            pull_requests.insert(
-                branch.clone(),
-                PullRequestInfo {
-                    number: pull_request.number,
-                    title: pull_request.title,
-                },
-            );
-        }
-    }
 
     Ok(pull_requests)
 }
@@ -404,7 +343,12 @@ pub fn is_branch_merged_into(repo_root: &Path, branch: &str, base: &str) -> Resu
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    anyhow::bail!("Failed to check merge status for '{}' against '{}': {}", branch, base, stderr);
+    anyhow::bail!(
+        "Failed to check merge status for '{}' against '{}': {}",
+        branch,
+        base,
+        stderr
+    );
 }
 
 pub fn run_command_in_dir(worktree_path: &Path, command: &[String]) -> Result<ExitStatus> {
@@ -419,11 +363,15 @@ pub fn run_command_in_dir(worktree_path: &Path, command: &[String]) -> Result<Ex
 }
 
 /// Add a new worktree
-pub fn add_worktree(repo_root: &Path, worktree_path: &Path, branch: &str, create_branch: bool) -> Result<()> {
+pub fn add_worktree(
+    repo_root: &Path,
+    worktree_path: &Path,
+    branch: &str,
+    create_branch: bool,
+) -> Result<()> {
     let messages = crate::i18n::Messages::new();
     let mut cmd = Command::new("git");
-    cmd.arg("worktree")
-        .arg("add");
+    cmd.arg("worktree").arg("add");
 
     if create_branch {
         // For new branch: git worktree add -b <branch> <path>
@@ -451,17 +399,13 @@ pub fn remove_worktree(repo_root: &Path, worktree_path: &Path, force: bool) -> R
     let messages = crate::i18n::Messages::new();
     let mut cmd = Command::new("git");
 
-    cmd.arg("worktree")
-        .arg("remove");
+    cmd.arg("worktree").arg("remove");
 
     if force {
         cmd.arg("-f");
     }
 
-    let output = cmd
-        .arg(worktree_path)
-        .current_dir(repo_root)
-        .output()?;
+    let output = cmd.arg(worktree_path).current_dir(repo_root).output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

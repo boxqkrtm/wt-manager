@@ -234,6 +234,27 @@ impl Messages {
         }
     }
 
+    pub fn loading_worktrees(&self) -> &str {
+        match self.lang {
+            Language::English => "Loading worktrees...",
+            Language::Korean => "워크트리 불러오는 중...",
+        }
+    }
+
+    pub fn loading_pull_requests(&self) -> &str {
+        match self.lang {
+            Language::English => "Loading PR previews...",
+            Language::Korean => "PR 미리보기 불러오는 중...",
+        }
+    }
+
+    pub fn pr_preview_unavailable(&self) -> &str {
+        match self.lang {
+            Language::English => "PR preview unavailable",
+            Language::Korean => "PR 미리보기를 불러오지 못했습니다",
+        }
+    }
+
     pub fn worktree_ready(&self) -> &str {
         match self.lang {
             Language::English => "✓ Worktree ready at:",
@@ -425,8 +446,12 @@ impl Messages {
 
     pub fn failed_verify_remote_ref_interrupted(&self) -> &str {
         match self.lang {
-            Language::English => "Failed to verify remote ref 'refs/remotes/{}' due to interrupted git process",
-            Language::Korean => "git 프로세스 중단으로 인해 원격 ref 'refs/remotes/{}' 확인에 실패했습니다",
+            Language::English => {
+                "Failed to verify remote ref 'refs/remotes/{}' due to interrupted git process"
+            }
+            Language::Korean => {
+                "git 프로세스 중단으로 인해 원격 ref 'refs/remotes/{}' 확인에 실패했습니다"
+            }
         }
     }
 

@@ -38,7 +38,7 @@ fn get_db_path() -> Result<PathBuf> {
 
 pub fn load_db() -> Result<Database> {
     let db_path = get_db_path()?;
-    
+
     if !db_path.exists() {
         return Ok(Database::default());
     }
@@ -58,7 +58,7 @@ pub fn save_db(db: &Database) -> Result<()> {
 pub fn save_project(repo_path: &Path) -> Result<()> {
     let messages = crate::i18n::Messages::new();
     let mut db = load_db()?;
-    
+
     let repo_name = repo_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -78,12 +78,15 @@ pub fn save_project(repo_path: &Path) -> Result<()> {
         default_automation_for_repo(repo_path)
     };
 
-    db.projects.insert(key, ProjectInfo {
+    db.projects.insert(
+        key,
+        ProjectInfo {
             path: repo_path.to_path_buf(),
             name: repo_name,
             last_accessed: now,
             automation,
-        });
+        },
+    );
 
     save_db(&db)?;
     Ok(())
@@ -92,17 +95,17 @@ pub fn save_project(repo_path: &Path) -> Result<()> {
 pub fn get_projects() -> Result<Vec<ProjectInfo>> {
     let db = load_db()?;
     let mut projects: Vec<ProjectInfo> = db.projects.values().cloned().collect();
-    
+
     // Sort by last accessed (most recent first)
     projects.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
-    
+
     Ok(projects)
 }
 
 pub fn update_last_accessed(repo_path: &Path) -> Result<()> {
     let mut db = load_db()?;
     let key = repo_path.to_string_lossy().to_string();
-    
+
     if let Some(project) = db.projects.get_mut(&key) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -110,7 +113,7 @@ pub fn update_last_accessed(repo_path: &Path) -> Result<()> {
         project.last_accessed = now;
         save_db(&db)?;
     }
-    
+
     Ok(())
 }
 
@@ -143,9 +146,15 @@ fn default_automation_for_repo(repo_path: &Path) -> Option<ProjectAutomationConf
     let mut post_create_hooks = Vec::new();
 
     if repo_path.join("mise.toml").exists() || repo_path.join(".mise.toml").exists() {
-        post_create_hooks.push("source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; mise install".to_string());
+        post_create_hooks.push(
+            "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; mise install"
+                .to_string(),
+        );
     } else if repo_path.join(".nvmrc").exists() {
-        post_create_hooks.push("source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; nvm use".to_string());
+        post_create_hooks.push(
+            "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; nvm use"
+                .to_string(),
+        );
     }
 
     if repo_path.join("pnpm-lock.yaml").exists() {
@@ -170,9 +179,12 @@ fn default_automation_for_repo(repo_path: &Path) -> Option<ProjectAutomationConf
 fn is_safe_repo_relative_path(path: &str) -> bool {
     let candidate = Path::new(path);
     !candidate.is_absolute()
-        && candidate
-            .components()
-            .all(|component| !matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+        && candidate.components().all(|component| {
+            !matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
 }
 
 pub fn get_project_automation(repo_path: &Path) -> Result<Option<ProjectAutomationConfig>> {
@@ -187,12 +199,18 @@ pub fn get_project_automation(repo_path: &Path) -> Result<Option<ProjectAutomati
 
 pub fn add_copy_file(repo_path: &Path, path: &str) -> Result<()> {
     if !is_safe_repo_relative_path(path) {
-        anyhow::bail!("Copy path must be a repo-root relative path without '..': {}", path);
+        anyhow::bail!(
+            "Copy path must be a repo-root relative path without '..': {}",
+            path
+        );
     }
 
     let mut db = load_db()?;
     let key = ensure_project_entry(&mut db, repo_path)?;
-    let project = db.projects.get_mut(&key).expect("project entry should exist");
+    let project = db
+        .projects
+        .get_mut(&key)
+        .expect("project entry should exist");
     let automation = project
         .automation
         .get_or_insert_with(ProjectAutomationConfig::default);
@@ -208,7 +226,10 @@ pub fn add_copy_file(repo_path: &Path, path: &str) -> Result<()> {
 pub fn remove_copy_file(repo_path: &Path, path: &str) -> Result<bool> {
     let mut db = load_db()?;
     let key = ensure_project_entry(&mut db, repo_path)?;
-    let project = db.projects.get_mut(&key).expect("project entry should exist");
+    let project = db
+        .projects
+        .get_mut(&key)
+        .expect("project entry should exist");
     let Some(automation) = project.automation.as_mut() else {
         return Ok(false);
     };
@@ -222,7 +243,10 @@ pub fn remove_copy_file(repo_path: &Path, path: &str) -> Result<bool> {
 pub fn add_hook(repo_path: &Path, hook_kind: &str, command: &str) -> Result<()> {
     let mut db = load_db()?;
     let key = ensure_project_entry(&mut db, repo_path)?;
-    let project = db.projects.get_mut(&key).expect("project entry should exist");
+    let project = db
+        .projects
+        .get_mut(&key)
+        .expect("project entry should exist");
     let automation = project
         .automation
         .get_or_insert_with(ProjectAutomationConfig::default);
@@ -241,7 +265,10 @@ pub fn add_hook(repo_path: &Path, hook_kind: &str, command: &str) -> Result<()> 
 pub fn remove_hook(repo_path: &Path, hook_kind: &str, index: usize) -> Result<bool> {
     let mut db = load_db()?;
     let key = ensure_project_entry(&mut db, repo_path)?;
-    let project = db.projects.get_mut(&key).expect("project entry should exist");
+    let project = db
+        .projects
+        .get_mut(&key)
+        .expect("project entry should exist");
     let Some(automation) = project.automation.as_mut() else {
         return Ok(false);
     };

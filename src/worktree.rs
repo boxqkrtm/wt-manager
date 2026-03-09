@@ -50,7 +50,10 @@ fn get_worktree_base_candidates(repo_path: &Path) -> Result<Vec<PathBuf>> {
 
     if let Some(repository) = git::get_repository_slug(repo_path)? {
         let remote_hash = short_hash(
-            &format!("{}:{}/{}", repository.host, repository.owner, repository.name),
+            &format!(
+                "{}:{}/{}",
+                repository.host, repository.owner, repository.name
+            ),
             5,
         );
         let owner_repo_hash_base = home.join("_wt").join(format!(
@@ -103,26 +106,32 @@ fn get_worktree_path(repo_path: &Path, branch: &str) -> Result<PathBuf> {
     Ok(wt_base.join(branch))
 }
 
-
 /// Change to the worktree directory and run setup
 fn switch_to_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
     let messages = crate::i18n::Messages::new();
     // We can't actually change the directory of the parent shell from Rust
     // Instead, we'll print the command for the user to execute
-    println!("\n{} {}", messages.worktree_ready(), worktree_path.display());
+    println!(
+        "\n{} {}",
+        messages.worktree_ready(),
+        worktree_path.display()
+    );
     println!("\n{}", messages.switch_to_worktree_guide());
     println!("  cd {}", worktree_path.display());
 
     crate::setup::SetupManager::run_post_cd(repo_root, worktree_path)?;
     crate::setup::SetupManager::run_auto_setup(worktree_path)?;
-    
+
     Ok(())
 }
 
 pub fn prepare_worktree(repo_root: &Path, branch: &str) -> Result<PreparedWorktree> {
     let messages = crate::i18n::Messages::new();
     if let Some(worktree_path) = find_existing_worktree_path(repo_root, branch)? {
-        println!("{}", messages.worktree_already_exists().replace("{}", branch));
+        println!(
+            "{}",
+            messages.worktree_already_exists().replace("{}", branch)
+        );
         db::update_last_accessed(repo_root)?;
         return Ok(PreparedWorktree {
             path: worktree_path,
@@ -137,19 +146,35 @@ pub fn prepare_worktree(repo_root: &Path, branch: &str) -> Result<PreparedWorktr
     fs::create_dir_all(&wt_base)?;
 
     // Try to add worktree for existing branch first
-    println!("{}", messages.adding_worktree_for_branch().replace("{}", branch));
+    println!(
+        "{}",
+        messages.adding_worktree_for_branch().replace("{}", branch)
+    );
     let result = git::add_worktree(repo_root, &worktree_path, branch, false);
 
     match result {
         Ok(_) => {
-            println!("{}", messages.worktree_added_existing_branch().replace("{}", branch));
+            println!(
+                "{}",
+                messages
+                    .worktree_added_existing_branch()
+                    .replace("{}", branch)
+            );
         }
         Err(_) => {
             // Branch doesn't exist, create new one
-            println!("{}", messages.branch_not_found_create_new().replace("{}", branch));
+            println!(
+                "{}",
+                messages.branch_not_found_create_new().replace("{}", branch)
+            );
             let err_message = messages.failed_create_worktree_context().to_string();
             git::add_worktree(repo_root, &worktree_path, branch, true).context(err_message)?;
-            println!("{}", messages.created_new_branch_with_worktree().replace("{}", branch));
+            println!(
+                "{}",
+                messages
+                    .created_new_branch_with_worktree()
+                    .replace("{}", branch)
+            );
         }
     }
 
