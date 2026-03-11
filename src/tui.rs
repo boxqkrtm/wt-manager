@@ -130,7 +130,11 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                         Err(e) => {
                             eprintln!("\n{} {}", messages.failed_to_delete(), e);
                             eprintln!("\n{}", messages.uncommitted_changes_tip());
-                            eprintln!("{} {}", messages.force_delete_command(), wt.path.display());
+                            eprintln!(
+                                "{} wt delete {} --force",
+                                messages.force_delete_command(),
+                                wt.branch
+                            );
                         }
                     }
                 }
