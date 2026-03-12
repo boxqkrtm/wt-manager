@@ -414,3 +414,19 @@ pub fn remove_worktree(repo_root: &Path, worktree_path: &Path, force: bool) -> R
 
     Ok(())
 }
+
+/// Prune stale worktree administrative files
+pub fn prune_worktrees(repo_root: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .arg("worktree")
+        .arg("prune")
+        .current_dir(repo_root)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree prune failed: {}", stderr);
+    }
+
+    Ok(())
+}

@@ -126,6 +126,7 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                     match git::remove_worktree(repo_root, &wt.path, false) {
                         Ok(_) => {
                             println!("{}", messages.worktree_deleted().replace("{}", &wt.branch));
+                            let _ = git::prune_worktrees(repo_root);
                         }
                         Err(e) => {
                             eprintln!("\n{} {}", messages.failed_to_delete(), e);
