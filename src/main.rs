@@ -352,6 +352,7 @@ fn handle_delete_command(current_dir: &Path, branch: &str, force: bool) -> Resul
             match git::remove_worktree(&repo_root, &wt.path, force) {
                 Ok(()) => {
                     println!("{}", messages.worktree_deleted().replace("{}", &wt.branch));
+                    let _ = git::prune_worktrees(&repo_root);
                 }
                 Err(e) => {
                     eprintln!("\n{} {}", messages.failed_to_delete(), e);
@@ -680,6 +681,8 @@ fn clean_stale_worktrees(
         }
     }
 
+    let _ = git::prune_worktrees(repo_root);
+
     Ok(())
 }
 
@@ -743,6 +746,8 @@ fn clean_merged_worktrees(
             }
         }
     }
+
+    let _ = git::prune_worktrees(repo_root);
 
     Ok(())
 }
