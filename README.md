@@ -2,6 +2,12 @@
 
 Git worktree 관리 도구 - TUI 기반 워크트리 생성/전환/삭제
 
+## Preview
+
+rust-lang/rust 저장소를 클론한 뒤 `wt`에서 워크트리 목록과 PR 제목이 함께 보이는 예시 화면입니다.
+
+![wt-manager preview](assets/readme-preview.svg)
+
 ## 요구사항
 
 - **zsh/bash**: `wt init` shell integration 사용

@@ -1,0 +1,46 @@
+<svg width="1400" height="860" viewBox="0 0 1400 860" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="wt-manager preview screenshot">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .body { font-size: 28px; fill: #e2e8f0; }
+      .cmd { fill: #93c5fd; }
+      .ok { fill: #86efac; }
+      .accent { fill: #facc15; }
+      .pr { fill: #f9a8d4; }
+      .muted { fill: #94a3b8; }
+    </style>
+  </defs>
+
+  <rect width="1400" height="860" fill="url(#bg)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="80" y="70" width="1240" height="720" rx="18" fill="#0f172a" stroke="#1e293b" stroke-width="2"/>
+    <rect x="80" y="70" width="1240" height="52" rx="18" fill="#111827"/>
+    <circle cx="110" cy="96" r="7" fill="#ef4444"/>
+    <circle cx="136" cy="96" r="7" fill="#f59e0b"/>
+    <circle cx="162" cy="96" r="7" fill="#22c55e"/>
+    <text x="190" y="102" class="mono muted" font-size="20">wt-manager preview</text>
+  </g>
+
+  <g class="mono body">
+    <text x="120" y="170" class="cmd">$ git clone https://github.com/rust-lang/rust.git</text>
+    <text x="120" y="210" class="ok">Cloning into 'rust'...</text>
+
+    <text x="120" y="280" class="cmd">$ cd rust</text>
+    <text x="120" y="320" class="cmd">$ wt</text>
+
+    <text x="120" y="390">Select worktree (fuzzy search)</text>
+    <text x="120" y="435">&gt; <tspan class="accent">master</tspan> ●</text>
+    <text x="120" y="480">  perf/simd-cleanup <tspan class="pr">#147052 rustc_codegen_ssa: avoid extra memcpy in scalar-to-vector path</tspan></text>
+    <text x="120" y="525">  fix/edition-lint</text>
+
+    <text x="120" y="610" class="muted">Tab: autocomplete | Enter: select | Ctrl+B: create | Ctrl+X: delete</text>
+  </g>
+</svg>
