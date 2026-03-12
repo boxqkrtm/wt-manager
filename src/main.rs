@@ -358,9 +358,9 @@ fn handle_delete_command(current_dir: &Path, branch: &str, force: bool) -> Resul
                     if !force {
                         eprintln!("\n{}", messages.uncommitted_changes_tip());
                         eprintln!(
-                            "{} {} --force",
+                            "{} wt delete {} --force",
                             messages.force_delete_command(),
-                            format!("wt delete {}", wt.branch)
+                            wt.branch
                         );
                     }
                 }
@@ -671,9 +671,9 @@ fn clean_stale_worktrees(
                 if !force {
                     eprintln!("\n{}", messages.uncommitted_changes_tip());
                     eprintln!(
-                        "{} {}",
+                        "{} wt delete {} --force",
                         messages.force_delete_command(),
-                        format!("wt delete {} --force", wt.branch)
+                        wt.branch
                     );
                 }
             }
@@ -735,9 +735,9 @@ fn clean_merged_worktrees(
                 if !force {
                     eprintln!("\n{}", messages.uncommitted_changes_tip());
                     eprintln!(
-                        "{} {}",
+                        "{} wt delete {} --force",
                         messages.force_delete_command(),
-                        format!("wt delete {} --force", wt.branch)
+                        wt.branch
                     );
                 }
             }
