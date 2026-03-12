@@ -18,17 +18,32 @@ use std::process::Command;
 #[command(name = "wt")]
 #[command(
     version,
-    about = "Advanced git worktree manager",
-    long_about = LONG_HELP,
-    after_help = TUI_HELP
+    about = cmd_about(),
+    long_about = long_help(),
+    after_help = tui_help()
 )]
 struct Args {
-    /// Legacy mode: switch or create worktree for BRANCH
-    #[arg(value_name = "BRANCH", required = false)]
+    #[arg(value_name = "BRANCH", required = false, help = arg_branch_help())]
     branch: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+fn cmd_about() -> &'static str {
+    i18n::Messages::new().cmd_about()
+}
+
+fn long_help() -> &'static str {
+    i18n::Messages::new().long_help()
+}
+
+fn tui_help() -> &'static str {
+    i18n::Messages::new().tui_help()
+}
+
+fn arg_branch_help() -> &'static str {
+    i18n::Messages::new().arg_branch_help()
 }
 
 fn main() -> Result<()> {
@@ -82,69 +97,114 @@ fn handle_legacy_branch(branch: &str, current_dir: &Path) -> Result<()> {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Initialize shell integration
+    #[command(about = cmd_init_about())]
     Init,
-    /// Open interactive TUI
+    #[command(about = cmd_tui_about())]
     Tui,
     #[command(hide = true)]
     Worktree {
         #[command(subcommand)]
         command: WorktreeAliasCommands,
     },
-    /// List all worktrees in this repository
+    #[command(about = cmd_list_about())]
     List,
-    /// Switch to existing worktree or create one if branch does not exist
+    #[command(about = cmd_cd_about())]
     Cd { branch: String },
-    /// Run a command inside a worktree
+    #[command(about = cmd_run_about())]
     Run {
         branch: String,
         #[arg(required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-    /// Delete a worktree
+    #[command(about = cmd_delete_about())]
     Delete {
         branch: String,
         #[arg(
             short,
             long,
-            help = "Force delete (use when normal delete fails due to uncommitted changes)."
+            help = arg_force_delete_help()
         )]
         force: bool,
     },
-    /// Remove worktrees whose tracking branches were deleted from remote or already merged
+    #[command(about = cmd_clean_about())]
     Clean {
-        /// Do not delete, only list removable worktrees
-        #[arg(short, long)]
+        #[arg(short, long, help = arg_dry_run_help())]
         dry_run: bool,
-        /// Force delete worktrees even when they have local changes
-        #[arg(short, long)]
+        #[arg(short, long, help = arg_force_clean_help())]
         force: bool,
-        /// Include worktrees whose tracking branch does not exist on remote
-        #[arg(long)]
+        #[arg(long, help = arg_include_untracked_help())]
         include_untracked: bool,
-        /// Optional remote name to check. If not set, checks all upstream remotes.
-        #[arg(short, long)]
+        #[arg(short, long, help = arg_remote_help())]
         remote: Option<String>,
-        /// Skip git fetch --prune before checking remote refs
-        #[arg(long)]
+        #[arg(long, help = arg_skip_fetch_help())]
         skip_fetch: bool,
-        /// Remove worktrees whose branch is already merged into the base branch
-        #[arg(long)]
+        #[arg(long, help = arg_merged_help())]
         merged: bool,
-        /// Base branch used with --merged
-        #[arg(long)]
+        #[arg(long, help = arg_base_help())]
         base: Option<String>,
     },
-    /// Manage saved projects
+    #[command(about = cmd_project_about())]
     Project {
         #[command(subcommand)]
         command: ProjectCommands,
     },
-    /// Manage wt configuration
+    #[command(about = cmd_config_about())]
     Config {
         #[command(subcommand)]
         command: ConfigCommands,
     },
+}
+
+fn cmd_init_about() -> &'static str {
+    i18n::Messages::new().cmd_init_about()
+}
+fn cmd_tui_about() -> &'static str {
+    i18n::Messages::new().cmd_tui_about()
+}
+fn cmd_list_about() -> &'static str {
+    i18n::Messages::new().cmd_list_about()
+}
+fn cmd_cd_about() -> &'static str {
+    i18n::Messages::new().cmd_cd_about()
+}
+fn cmd_run_about() -> &'static str {
+    i18n::Messages::new().cmd_run_about()
+}
+fn cmd_delete_about() -> &'static str {
+    i18n::Messages::new().cmd_delete_about()
+}
+fn arg_force_delete_help() -> &'static str {
+    i18n::Messages::new().arg_force_delete_help()
+}
+fn cmd_clean_about() -> &'static str {
+    i18n::Messages::new().cmd_clean_about()
+}
+fn arg_dry_run_help() -> &'static str {
+    i18n::Messages::new().arg_dry_run_help()
+}
+fn arg_force_clean_help() -> &'static str {
+    i18n::Messages::new().arg_force_clean_help()
+}
+fn arg_include_untracked_help() -> &'static str {
+    i18n::Messages::new().arg_include_untracked_help()
+}
+fn arg_remote_help() -> &'static str {
+    i18n::Messages::new().arg_remote_help()
+}
+fn arg_skip_fetch_help() -> &'static str {
+    i18n::Messages::new().arg_skip_fetch_help()
+}
+fn arg_merged_help() -> &'static str {
+    i18n::Messages::new().arg_merged_help()
+}
+fn arg_base_help() -> &'static str {
+    i18n::Messages::new().arg_base_help()
+}
+fn cmd_project_about() -> &'static str {
+    i18n::Messages::new().cmd_project_about()
+}
+fn cmd_config_about() -> &'static str {
+    i18n::Messages::new().cmd_config_about()
 }
 
 #[derive(Subcommand, Debug)]
@@ -183,8 +243,12 @@ enum WorktreeAliasCommands {
 
 #[derive(Subcommand, Debug)]
 enum ProjectCommands {
-    /// List saved projects by last accessed order
+    #[command(about = cmd_project_list_about())]
     List,
+}
+
+fn cmd_project_list_about() -> &'static str {
+    i18n::Messages::new().cmd_project_list_about()
 }
 
 #[derive(Subcommand, Debug)]
@@ -412,44 +476,48 @@ fn hook_kind_name(hook: &HookKind) -> &'static str {
 }
 
 fn handle_config_command(command: ConfigCommands, current_dir: &Path) -> Result<()> {
+    let messages = i18n::Messages::new();
     let repo_root = match get_repo_root_or_project_tui(current_dir)? {
         Some(root) => root,
-        None => anyhow::bail!("This command requires a git repository."),
+        None => anyhow::bail!("{}", messages.cmd_requires_repo()),
     };
 
     match command {
         ConfigCommands::Show => {
             match db::get_project_automation(&repo_root)? {
                 Some(config) => {
-                    println!("Repo config for {}", repo_root.display());
-                    println!("copy_files:");
+                    println!("{} {}", messages.config_show_header(), repo_root.display());
+                    println!("{}", messages.config_copy_files_label());
                     for entry in config.copy_files {
                         println!("  - {}", entry);
                     }
-                    println!("post_create_hooks:");
+                    println!("{}", messages.config_post_create_hooks_label());
                     for (index, entry) in config.post_create_hooks.iter().enumerate() {
                         println!("  [{}] {}", index, entry);
                     }
-                    println!("post_cd_hooks:");
+                    println!("{}", messages.config_post_cd_hooks_label());
                     for (index, entry) in config.post_cd_hooks.iter().enumerate() {
                         println!("  [{}] {}", index, entry);
                     }
                 }
-                None => println!("No repo-specific wt config found."),
+                None => println!("{}", messages.config_no_config_found()),
             }
             Ok(())
         }
         ConfigCommands::Copy { command } => match command {
             CopyCommands::Add { path } => {
                 db::add_copy_file(&repo_root, &path)?;
-                println!("Added copy file '{}'", path);
+                println!("{}", messages.config_added_copy_file().replace("{}", &path));
                 Ok(())
             }
             CopyCommands::Remove { path } => {
                 if db::remove_copy_file(&repo_root, &path)? {
-                    println!("Removed copy file '{}'", path);
+                    println!("{}", messages.config_removed_copy_file().replace("{}", &path));
                 } else {
-                    println!("Copy file '{}' was not configured", path);
+                    println!(
+                        "{}",
+                        messages.config_copy_file_not_configured().replace("{}", &path)
+                    );
                 }
                 Ok(())
             }
@@ -457,14 +525,32 @@ fn handle_config_command(command: ConfigCommands, current_dir: &Path) -> Result<
         ConfigCommands::Hook { command } => match command {
             HookCommands::Add { hook, command } => {
                 db::add_hook(&repo_root, hook_kind_name(&hook), &command)?;
-                println!("Added {} hook '{}'", hook_kind_name(&hook), command);
+                println!(
+                    "{}",
+                    messages
+                        .config_added_hook()
+                        .replacen("{}", hook_kind_name(&hook), 1)
+                        .replacen("{}", &command, 1)
+                );
                 Ok(())
             }
             HookCommands::Remove { hook, index } => {
                 if db::remove_hook(&repo_root, hook_kind_name(&hook), index)? {
-                    println!("Removed {} hook at index {}", hook_kind_name(&hook), index);
+                    println!(
+                        "{}",
+                        messages
+                            .config_removed_hook_at_index()
+                            .replacen("{}", hook_kind_name(&hook), 1)
+                            .replacen("{}", &index.to_string(), 1)
+                    );
                 } else {
-                    println!("No {} hook found at index {}", hook_kind_name(&hook), index);
+                    println!(
+                        "{}",
+                        messages
+                            .config_no_hook_found_at_index()
+                            .replacen("{}", hook_kind_name(&hook), 1)
+                            .replacen("{}", &index.to_string(), 1)
+                    );
                 }
                 Ok(())
             }
@@ -704,16 +790,24 @@ fn clean_merged_worktrees(
             continue;
         }
         if git::is_branch_merged_into(repo_root, &wt.branch, &base_branch)? {
-            merged_worktrees.push((wt, format!("merged into '{}'", base_branch)));
+            merged_worktrees.push((
+                wt,
+                messages.merged_into().replace("{}", &base_branch),
+            ));
         }
     }
 
     if merged_worktrees.is_empty() {
-        println!("No merged worktrees found.");
+        println!("{}", messages.no_merged_worktrees_found());
         return Ok(());
     }
 
-    println!("Found {} merged worktree(s):", merged_worktrees.len());
+    println!(
+        "{}",
+        messages
+            .found_merged_worktrees()
+            .replace("{}", &merged_worktrees.len().to_string())
+    );
     for (wt, reason) in &merged_worktrees {
         println!("  {} ({})", wt.branch, reason);
         println!("    {}", wt.path.display());
@@ -768,7 +862,8 @@ fn list_projects() -> Result<()> {
 }
 
 fn init_shell_integration() -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Failed to get home directory"))?;
+    let messages = i18n::Messages::new();
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("{}", messages.failed_get_home_dir()))?;
     let shell_integration_path = home.join(".wt-manager.sh");
     let current_exe = env::current_exe()?;
     let script = format!(
@@ -807,7 +902,7 @@ fn init_shell_integration() -> Result<()> {
                 .any(|line| line.trim() == "source ~/.wt-manager.sh");
 
         if already_configured {
-            println!("Already configured {}", rc_path.display());
+            println!("{}", messages.init_already_configured().replace("{}", &rc_path.display().to_string()));
             continue;
         }
 
@@ -817,68 +912,17 @@ fn init_shell_integration() -> Result<()> {
         }
         rewritten.push_str("# wt-manager shell integration\nsource ~/.wt-manager.sh\n");
         fs::write(&rc_path, rewritten)?;
-        println!("Updated {}", rc_path.display());
+        println!("{}", messages.init_updated().replace("{}", &rc_path.display().to_string()));
         updated_any = true;
     }
 
-    println!("Generated {}", shell_integration_path.display());
+    println!("{}", messages.init_generated().replace("{}", &shell_integration_path.display().to_string()));
     if !updated_any {
-        println!("Shell integration was already configured.");
+        println!("{}", messages.init_already_set_up());
     }
 
     Ok(())
 }
 
-const LONG_HELP: &str = r#"Advanced Git worktree manager for terminal users.
 
-Usage:
-  wt init                     # install shell integration into ~/.wt-manager.sh and your shell rc
-  wt                          # interactive project/worktree selector (default)
-  wt <branch>                 # legacy mode: create or switch worktree
-  wt tui                      # explicitly open interactive TUI
-  wt list                     # list worktrees (main repo)
-  wt cd <branch>              # same as `wt <branch>`
-  wt run <branch> -- <cmd...>
-  wt clean                    # delete worktrees with deleted remote tracking branches
-  wt clean --merged [--base origin/main]
-  wt clean --remote origin --dry-run
-  wt delete <branch> [--force] # delete a worktree
-  wt project list             # list registered projects (recent first)
-  wt config show
-  wt config copy add .env.local
-  wt config hook add post-create "pnpm install"
 
-Branch behavior:
-  wt <branch> / wt cd <branch>
-  - Try existing branch first
-  - If branch does not exist, create it automatically
-  - Run configured postCreate/postCd hooks from ~/.wt-manager/db.json
-
-Delete safety:
-  - Main worktree is protected and cannot be removed
-  - If deletion fails (e.g., uncommitted changes), retry with --force
-
-Note:
-  Actual directory change is performed by the generated shell integration (`~/.wt-manager.sh`)
-  by parsing `cd` output from the wt command.
-
-Examples:
-  wt
-  wt feature/login
-  wt list
-  wt run feature/login -- cargo test
-  wt delete feature/login --force
-  wt project list
-"#;
-
-const TUI_HELP: &str = r#"TUI mode keys:
-  Type:        search/fuzzy input
-  Tab:         autocomplete with top match
-  Enter:       select
-  Ctrl+B:      create (worktree mode only)
-  Ctrl+X:      delete exact match (worktree mode only)
-  Ctrl+C/Esc:  cancel
-
-TUI is opened automatically when:
-- no argument and current dir is a git repository -> worktree selector
-- no argument and outside git repository -> project selector"#;
