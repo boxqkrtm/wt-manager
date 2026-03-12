@@ -489,7 +489,401 @@ impl Messages {
             Language::Korean => "(정확히 일치)",
         }
     }
+
+    // Config command messages
+    pub fn config_show_header(&self) -> &str {
+        match self.lang {
+            Language::English => "Repo config for",
+            Language::Korean => "저장소 설정:",
+        }
+    }
+
+    pub fn config_copy_files_label(&self) -> &str {
+        match self.lang {
+            Language::English => "copy_files:",
+            Language::Korean => "복사 파일 목록:",
+        }
+    }
+
+    pub fn config_post_create_hooks_label(&self) -> &str {
+        match self.lang {
+            Language::English => "post_create_hooks:",
+            Language::Korean => "워크트리 생성 후 훅:",
+        }
+    }
+
+    pub fn config_post_cd_hooks_label(&self) -> &str {
+        match self.lang {
+            Language::English => "post_cd_hooks:",
+            Language::Korean => "워크트리 전환 후 훅:",
+        }
+    }
+
+    pub fn config_no_config_found(&self) -> &str {
+        match self.lang {
+            Language::English => "No repo-specific wt config found.",
+            Language::Korean => "저장소별 wt 설정이 없습니다.",
+        }
+    }
+
+    pub fn config_added_copy_file(&self) -> &str {
+        match self.lang {
+            Language::English => "Added copy file '{}'",
+            Language::Korean => "복사 파일 '{}'이(가) 추가되었습니다",
+        }
+    }
+
+    pub fn config_removed_copy_file(&self) -> &str {
+        match self.lang {
+            Language::English => "Removed copy file '{}'",
+            Language::Korean => "복사 파일 '{}'이(가) 삭제되었습니다",
+        }
+    }
+
+    pub fn config_copy_file_not_configured(&self) -> &str {
+        match self.lang {
+            Language::English => "Copy file '{}' was not configured",
+            Language::Korean => "복사 파일 '{}'은(는) 설정되어 있지 않습니다",
+        }
+    }
+
+    pub fn config_added_hook(&self) -> &str {
+        match self.lang {
+            Language::English => "Added {} hook '{}'",
+            Language::Korean => "{} 훅 '{}'이(가) 추가되었습니다",
+        }
+    }
+
+    pub fn config_removed_hook_at_index(&self) -> &str {
+        match self.lang {
+            Language::English => "Removed {} hook at index {}",
+            Language::Korean => "{} 훅 인덱스 {}이(가) 삭제되었습니다",
+        }
+    }
+
+    pub fn config_no_hook_found_at_index(&self) -> &str {
+        match self.lang {
+            Language::English => "No {} hook found at index {}",
+            Language::Korean => "{} 훅이 인덱스 {}에 없습니다",
+        }
+    }
+
+    // Merged worktrees messages
+    pub fn merged_into(&self) -> &str {
+        match self.lang {
+            Language::English => "merged into '{}'",
+            Language::Korean => "'{}'에 머지됨",
+        }
+    }
+
+    pub fn no_merged_worktrees_found(&self) -> &str {
+        match self.lang {
+            Language::English => "No merged worktrees found.",
+            Language::Korean => "머지된 워크트리가 없습니다.",
+        }
+    }
+
+    pub fn found_merged_worktrees(&self) -> &str {
+        match self.lang {
+            Language::English => "Found {} merged worktree(s):",
+            Language::Korean => "{}개의 머지된 워크트리를 찾았습니다:",
+        }
+    }
+
+    // Shell integration init messages
+    pub fn init_already_configured(&self) -> &str {
+        match self.lang {
+            Language::English => "Already configured {}",
+            Language::Korean => "이미 설정되어 있습니다: {}",
+        }
+    }
+
+    pub fn init_updated(&self) -> &str {
+        match self.lang {
+            Language::English => "Updated {}",
+            Language::Korean => "업데이트됨: {}",
+        }
+    }
+
+    pub fn init_generated(&self) -> &str {
+        match self.lang {
+            Language::English => "Generated {}",
+            Language::Korean => "생성됨: {}",
+        }
+    }
+
+    pub fn init_already_set_up(&self) -> &str {
+        match self.lang {
+            Language::English => "Shell integration was already configured.",
+            Language::Korean => "셸 통합이 이미 설정되어 있습니다.",
+        }
+    }
+
+    // --help / long_about text
+    pub fn long_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => LONG_HELP_EN,
+            Language::Korean => LONG_HELP_KO,
+        }
+    }
+
+    pub fn tui_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => TUI_HELP_EN,
+            Language::Korean => TUI_HELP_KO,
+        }
+    }
+
+    pub fn cmd_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Advanced git worktree manager",
+            Language::Korean => "고급 git 워크트리 관리 도구",
+        }
+    }
+
+    // Subcommand about text
+    pub fn cmd_init_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Initialize shell integration",
+            Language::Korean => "셸 통합 설치",
+        }
+    }
+
+    pub fn cmd_tui_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Open interactive TUI",
+            Language::Korean => "인터랙티브 TUI 열기",
+        }
+    }
+
+    pub fn cmd_list_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "List all worktrees in this repository",
+            Language::Korean => "이 저장소의 모든 워크트리 목록 출력",
+        }
+    }
+
+    pub fn cmd_cd_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Switch to existing worktree or create one if branch does not exist",
+            Language::Korean => "기존 워크트리로 전환하거나 브랜치가 없으면 새로 생성",
+        }
+    }
+
+    pub fn cmd_run_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Run a command inside a worktree",
+            Language::Korean => "워크트리 내에서 명령어 실행",
+        }
+    }
+
+    pub fn cmd_delete_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Delete a worktree",
+            Language::Korean => "워크트리 삭제",
+        }
+    }
+
+    pub fn cmd_clean_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Remove worktrees whose tracking branches were deleted from remote or already merged",
+            Language::Korean => "원격에서 삭제되었거나 이미 머지된 추적 브랜치를 가진 워크트리 삭제",
+        }
+    }
+
+    pub fn cmd_project_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Manage saved projects",
+            Language::Korean => "저장된 프로젝트 관리",
+        }
+    }
+
+    pub fn cmd_project_list_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "List saved projects by last accessed order",
+            Language::Korean => "마지막 접근 순으로 저장된 프로젝트 목록 출력",
+        }
+    }
+
+    pub fn cmd_config_about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Manage wt configuration",
+            Language::Korean => "wt 설정 관리",
+        }
+    }
+
+    // Arg help text
+    pub fn arg_branch_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Legacy mode: switch or create worktree for BRANCH",
+            Language::Korean => "레거시 모드: BRANCH에 대한 워크트리 전환 또는 생성",
+        }
+    }
+
+    pub fn arg_force_delete_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Force delete (use when normal delete fails due to uncommitted changes).",
+            Language::Korean => "강제 삭제 (미커밋 변경사항으로 인해 일반 삭제가 실패할 때 사용).",
+        }
+    }
+
+    pub fn arg_dry_run_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Do not delete, only list removable worktrees",
+            Language::Korean => "삭제하지 않고 삭제 가능한 워크트리 목록만 출력",
+        }
+    }
+
+    pub fn arg_force_clean_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Force delete worktrees even when they have local changes",
+            Language::Korean => "로컬 변경사항이 있어도 워크트리 강제 삭제",
+        }
+    }
+
+    pub fn arg_include_untracked_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Include worktrees whose tracking branch does not exist on remote",
+            Language::Korean => "원격에 추적 브랜치가 없는 워크트리도 포함",
+        }
+    }
+
+    pub fn arg_remote_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Optional remote name to check. If not set, checks all upstream remotes.",
+            Language::Korean => "확인할 원격 이름 (선택 사항). 설정하지 않으면 모든 upstream 원격을 확인합니다.",
+        }
+    }
+
+    pub fn arg_skip_fetch_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Skip git fetch --prune before checking remote refs",
+            Language::Korean => "원격 ref 확인 전 git fetch --prune을 건너뜁니다",
+        }
+    }
+
+    pub fn arg_merged_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Remove worktrees whose branch is already merged into the base branch",
+            Language::Korean => "베이스 브랜치에 이미 머지된 브랜치의 워크트리 삭제",
+        }
+    }
+
+    pub fn arg_base_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Base branch used with --merged",
+            Language::Korean => "--merged에서 사용할 베이스 브랜치",
+        }
+    }
 }
+
+const LONG_HELP_EN: &str = r#"Advanced Git worktree manager for terminal users.
+
+Usage:
+  wt init                     # install shell integration into ~/.wt-manager.sh and your shell rc
+  wt                          # interactive project/worktree selector (default)
+  wt <branch>                 # legacy mode: create or switch worktree
+  wt tui                      # explicitly open interactive TUI
+  wt list                     # list worktrees (main repo)
+  wt cd <branch>              # same as `wt <branch>`
+  wt run <branch> -- <cmd...>
+  wt clean                    # delete worktrees with deleted remote tracking branches
+  wt clean --merged [--base origin/main]
+  wt clean --remote origin --dry-run
+  wt delete <branch> [--force] # delete a worktree
+  wt project list             # list registered projects (recent first)
+  wt config show
+  wt config copy add .env.local
+  wt config hook add post-create "pnpm install"
+
+Branch behavior:
+  wt <branch> / wt cd <branch>
+  - Try existing branch first
+  - If branch does not exist, create it automatically
+  - Run configured postCreate/postCd hooks from ~/.wt-manager/db.json
+
+Delete safety:
+  - Main worktree is protected and cannot be removed
+  - If deletion fails (e.g., uncommitted changes), retry with --force
+
+Note:
+  Actual directory change is performed by the generated shell integration (`~/.wt-manager.sh`)
+  by parsing `cd` output from the wt command.
+
+Examples:
+  wt
+  wt feature/login
+  wt list
+  wt run feature/login -- cargo test
+  wt delete feature/login --force
+  wt project list
+"#;
+
+const LONG_HELP_KO: &str = r#"터미널 사용자를 위한 고급 Git 워크트리 관리 도구.
+
+사용법:
+  wt init                     # 셸 통합 설치 (~/.wt-manager.sh 및 shell rc에 저장)
+  wt                          # 인터랙티브 프로젝트/워크트리 선택기 (기본값)
+  wt <브랜치>                 # 레거시 모드: 워크트리 생성 또는 전환
+  wt tui                      # 인터랙티브 TUI 열기
+  wt list                     # 워크트리 목록 출력 (메인 저장소)
+  wt cd <브랜치>              # `wt <브랜치>`와 동일
+  wt run <브랜치> -- <명령어...>
+  wt clean                    # 원격에서 삭제된 추적 브랜치를 가진 워크트리 삭제
+  wt clean --merged [--base origin/main]
+  wt clean --remote origin --dry-run
+  wt delete <브랜치> [--force] # 워크트리 삭제
+  wt project list             # 저장된 프로젝트 목록 (최근 순)
+  wt config show
+  wt config copy add .env.local
+  wt config hook add post-create "pnpm install"
+
+브랜치 동작:
+  wt <브랜치> / wt cd <브랜치>
+  - 기존 브랜치를 먼저 찾습니다
+  - 브랜치가 없으면 자동으로 생성합니다
+  - ~/.wt-manager/db.json에 설정된 postCreate/postCd 훅을 실행합니다
+
+삭제 안전장치:
+  - 메인 워크트리는 보호되어 삭제할 수 없습니다
+  - 삭제 실패 시 (예: 미커밋 변경사항) --force로 재시도하세요
+
+참고:
+  실제 디렉터리 변경은 생성된 셸 통합 (`~/.wt-manager.sh`)이
+  wt 명령의 `cd` 출력을 파싱하여 수행합니다.
+
+예시:
+  wt
+  wt feature/login
+  wt list
+  wt run feature/login -- cargo test
+  wt delete feature/login --force
+  wt project list
+"#;
+
+const TUI_HELP_EN: &str = r#"TUI mode keys:
+  Type:        search/fuzzy input
+  Tab:         autocomplete with top match
+  Enter:       select
+  Ctrl+B:      create (worktree mode only)
+  Ctrl+X:      delete exact match (worktree mode only)
+  Ctrl+C/Esc:  cancel
+
+TUI is opened automatically when:
+- no argument and current dir is a git repository -> worktree selector
+- no argument and outside git repository -> project selector"#;
+
+const TUI_HELP_KO: &str = r#"TUI 모드 키:
+  입력:        검색/퍼지 입력
+  Tab:         상위 매칭으로 자동완성
+  Enter:       선택
+  Ctrl+B:      생성 (워크트리 모드만)
+  Ctrl+X:      정확히 일치하는 항목 삭제 (워크트리 모드만)
+  Ctrl+C/Esc:  취소
+
+TUI가 자동으로 열리는 경우:
+- 인자 없이 실행하고 현재 디렉터리가 git 저장소인 경우 -> 워크트리 선택기
+- 인자 없이 실행하고 git 저장소 외부인 경우 -> 프로젝트 선택기"#;
 
 impl Default for Messages {
     fn default() -> Self {
