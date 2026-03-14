@@ -1,6 +1,7 @@
 # wt-manager
 
 Git worktree 관리 도구 - TUI 기반 워크트리 생성/전환/삭제
+![alt preview image](./screenshot.png)
 
 ## 요구사항
 
