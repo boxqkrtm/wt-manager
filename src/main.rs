@@ -405,34 +405,30 @@ fn handle_delete_command(current_dir: &Path, branch: &str, force: bool) -> Resul
         .iter()
         .find(|wt| wt.matches_name(branch));
 
-    match target {
-        Some(wt) => {
-            if wt.is_main {
-                eprintln!("{}", messages.cannot_delete_main());
-                return Ok(());
-            }
+    let Some(wt) = target else {
+        anyhow::bail!("{}", messages.cannot_find_worktree().replace("{}", branch));
+    };
 
-            println!("\n{} {}", messages.deleting_worktree(), wt.name());
-            match git::remove_worktree(&repo_root, &wt.path, force) {
-                Ok(()) => {
-                    println!("{}", messages.worktree_deleted().replace("{}", wt.name()));
-                    let _ = git::prune_worktrees(&repo_root);
-                }
-                Err(e) => {
-                    eprintln!("\n{} {}", messages.failed_to_delete(), e);
-                    if !force {
-                        eprintln!("\n{}", messages.uncommitted_changes_tip());
-                        eprintln!(
-                            "{} wt delete {} --force",
-                            messages.force_delete_command(),
-                            wt.name()
-                        );
-                    }
-                }
-            }
+    if wt.is_main {
+        anyhow::bail!("{}", messages.cannot_delete_main());
+    }
+
+    println!("\n{} {}", messages.deleting_worktree(), wt.name());
+    match git::remove_worktree(&repo_root, &wt.path, force) {
+        Ok(()) => {
+            println!("{}", messages.worktree_deleted().replace("{}", wt.name()));
+            let _ = git::prune_worktrees(&repo_root);
         }
-        None => {
-            eprintln!("{}", messages.cannot_find_worktree().replace("{}", branch));
+        Err(error) => {
+            if !force {
+                eprintln!("\n{}", messages.uncommitted_changes_tip());
+                eprintln!(
+                    "{} wt delete {} --force",
+                    messages.force_delete_command(),
+                    wt.name()
+                );
+            }
+            return Err(error);
         }
     }
 
@@ -749,7 +745,7 @@ fn clean_stale_worktrees(
         return Ok(());
     }
 
-    let messages = i18n::Messages::new();
+    let mut failed_deletions = 0usize;
     for (wt, _) in stale_worktrees {
         println!("\n{} {}", messages.deleting_worktree(), wt.name());
         match git::remove_worktree(repo_root, &wt.path, force) {
@@ -757,6 +753,7 @@ fn clean_stale_worktrees(
                 println!("{}", messages.worktree_deleted().replace("{}", wt.name()));
             }
             Err(e) => {
+                failed_deletions += 1;
                 eprintln!("\n{} {}", messages.failed_to_delete(), e);
                 if !force {
                     eprintln!("\n{}", messages.uncommitted_changes_tip());
@@ -771,6 +768,10 @@ fn clean_stale_worktrees(
     }
 
     let _ = git::prune_worktrees(repo_root);
+
+    if failed_deletions > 0 {
+        anyhow::bail!("Failed to delete {} stale worktree(s)", failed_deletions);
+    }
 
     Ok(())
 }
@@ -828,6 +829,7 @@ fn clean_merged_worktrees(
         return Ok(());
     }
 
+    let mut failed_deletions = 0usize;
     for (wt, _) in merged_worktrees {
         println!("\n{} {}", messages.deleting_worktree(), wt.name());
         match git::remove_worktree(repo_root, &wt.path, force) {
@@ -835,6 +837,7 @@ fn clean_merged_worktrees(
                 println!("{}", messages.worktree_deleted().replace("{}", wt.name()));
             }
             Err(error) => {
+                failed_deletions += 1;
                 eprintln!("\n{} {}", messages.failed_to_delete(), error);
                 if !force {
                     eprintln!("\n{}", messages.uncommitted_changes_tip());
@@ -849,6 +852,10 @@ fn clean_merged_worktrees(
     }
 
     let _ = git::prune_worktrees(repo_root);
+
+    if failed_deletions > 0 {
+        anyhow::bail!("Failed to delete {} merged worktree(s)", failed_deletions);
+    }
 
     Ok(())
 }
@@ -936,4 +943,106 @@ fn init_shell_integration() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{clean_merged_worktrees, handle_delete_command};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("wt-manager-{prefix}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn git(repo_root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .env("GIT_AUTHOR_NAME", "wt-manager")
+            .env("GIT_AUTHOR_EMAIL", "wt-manager@example.com")
+            .env("GIT_COMMITTER_NAME", "wt-manager")
+            .env("GIT_COMMITTER_EMAIL", "wt-manager@example.com")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {:?}", args);
+    }
+
+    fn init_repo() -> PathBuf {
+        let repo_root = make_temp_dir("repo");
+        git(&repo_root, &["init"]);
+        fs::write(repo_root.join("README.md"), "hello\n").unwrap();
+        git(&repo_root, &["add", "README.md"]);
+        git(&repo_root, &["commit", "-m", "init"]);
+        repo_root
+    }
+
+    #[test]
+    fn handle_delete_command_returns_error_for_failed_removal() {
+        let _guard = env_lock().lock().unwrap();
+        let temp_home = make_temp_dir("home");
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let repo_root = init_repo();
+        let worktree_path = temp_home.join("feature-wt");
+        git(
+            &repo_root,
+            &["worktree", "add", worktree_path.to_str().unwrap(), "-b", "feature"],
+        );
+        fs::write(worktree_path.join("dirty.txt"), "dirty\n").unwrap();
+
+        let result = handle_delete_command(&repo_root, "feature", false);
+
+        assert!(result.is_err());
+
+        match previous_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+        fs::remove_dir_all(repo_root).unwrap();
+        fs::remove_dir_all(worktree_path).unwrap();
+        fs::remove_dir_all(temp_home).unwrap();
+    }
+
+    #[test]
+    fn clean_merged_worktrees_returns_error_for_failed_removal() {
+        let _guard = env_lock().lock().unwrap();
+        let temp_home = make_temp_dir("home");
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let repo_root = init_repo();
+        let worktree_path = temp_home.join("feature-wt");
+        git(
+            &repo_root,
+            &["worktree", "add", worktree_path.to_str().unwrap(), "-b", "feature"],
+        );
+        fs::write(worktree_path.join("dirty.txt"), "dirty\n").unwrap();
+
+        let result = clean_merged_worktrees(&repo_root, false, false, Some("master"));
+
+        assert!(result.is_err());
+
+        match previous_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+        fs::remove_dir_all(repo_root).unwrap();
+        fs::remove_dir_all(worktree_path).unwrap();
+        fs::remove_dir_all(temp_home).unwrap();
+    }
+}
 

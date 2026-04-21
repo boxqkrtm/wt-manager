@@ -120,7 +120,7 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
 
             if let Some(wt) = worktree_to_delete {
                 if wt.is_main {
-                    eprintln!("{}", messages.cannot_delete_main());
+                    return Err(anyhow::anyhow!(messages.cannot_delete_main().to_string()));
                 } else {
                     println!("\n{} {}", messages.deleting_worktree(), wt.name());
                     match git::remove_worktree(repo_root, &wt.path, false) {
@@ -129,13 +129,13 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                             let _ = git::prune_worktrees(repo_root);
                         }
                         Err(e) => {
-                            eprintln!("\n{} {}", messages.failed_to_delete(), e);
                             eprintln!("\n{}", messages.uncommitted_changes_tip());
                             eprintln!(
                                 "{} wt delete {} --force",
                                 messages.force_delete_command(),
                                 wt.name()
                             );
+                            return Err(e);
                         }
                     }
                 }
