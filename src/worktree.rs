@@ -113,6 +113,7 @@ fn switch_to_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
         worktree_path.display()
     );
     println!("\n{}", messages.switch_to_worktree_guide());
+    crate::maybe_print_shell_cd_marker(worktree_path);
     println!("  cd {}", worktree_path.display());
 
     crate::setup::SetupManager::run_post_cd(repo_root, worktree_path)?;

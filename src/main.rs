@@ -14,6 +14,18 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+pub(crate) const SHELL_CD_MARKER_PREFIX: &str = "__WT_MANAGER_CD__=";
+
+pub(crate) fn shell_cd_marker_line(path: &Path) -> String {
+    format!("{}{}", SHELL_CD_MARKER_PREFIX, path.display())
+}
+
+pub(crate) fn maybe_print_shell_cd_marker(path: &Path) {
+    if env::var_os("WT_MANAGER_CAPTURE_CD").is_some() {
+        println!("{}", shell_cd_marker_line(path));
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "wt")]
 #[command(
@@ -885,10 +897,7 @@ fn init_shell_integration() -> Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("{}", messages.failed_get_home_dir()))?;
     let shell_integration_path = home.join(".wt-manager.sh");
     let current_exe = env::current_exe()?;
-    let script = format!(
-        "# wt-manager shell integration\nwt() {{\n    local wt_bin=\"{}\"\n\n    if [[ ! -f \"$wt_bin\" ]]; then\n        echo \"Error: wt binary not found. Run 'cargo install ...' and 'wt init' first.\"\n        return 1\n    fi\n\n    local tmp_output=$(mktemp)\n    local exit_code\n    if [[ -n \"$ZSH_VERSION\" ]]; then\n        \"$wt_bin\" \"$@\" | tee \"$tmp_output\"\n        local -a pipe_status=(\"${{pipestatus[@]}}\")\n        exit_code=${{pipe_status[1]}}\n    else\n        \"$wt_bin\" \"$@\" | tee \"$tmp_output\"\n        local -a pipe_status=(\"${{PIPESTATUS[@]}}\")\n        exit_code=${{pipe_status[0]}}\n    fi\n    local cd_line=$(grep \"^  cd \" \"$tmp_output\" | head -n1)\n\n    if [[ -n \"$cd_line\" ]]; then\n        local target_dir=$(echo \"$cd_line\" | sed 's/^  cd //')\n        if [[ -d \"$target_dir\" ]]; then\n            cd \"$target_dir\" || {{\n                rm -f \"$tmp_output\"\n                return 1\n            }}\n            echo \"\"\n            echo \"Changed to: $(pwd)\"\n        fi\n    fi\n\n    rm -f \"$tmp_output\"\n    return $exit_code\n}}\n",
-        current_exe.display()
-    );
+    let script = render_shell_integration_script(&current_exe);
     fs::write(&shell_integration_path, script)?;
 
     let rc_targets = [home.join(".zshrc"), home.join(".bashrc")];
@@ -943,9 +952,24 @@ fn init_shell_integration() -> Result<()> {
     Ok(())
 }
 
+fn render_shell_integration_script(current_exe: &Path) -> String {
+    format!(
+        "# wt-manager shell integration\nwt() {{\n    local wt_bin=\"{}\"\n\n    if [[ ! -f \"$wt_bin\" ]]; then\n        echo \"Error: wt binary not found. Run 'cargo install ...' and 'wt init' first.\"\n        return 1\n    fi\n\n    local tmp_output=$(mktemp)\n    local tmp_marker=$(mktemp)\n    local exit_code\n    if [[ -n \"$ZSH_VERSION\" ]]; then\n        WT_MANAGER_CAPTURE_CD=1 \"$wt_bin\" \"$@\" | tee \"$tmp_output\" >(grep \"^{}\" > \"$tmp_marker\") | grep -v \"^{}\"\n        local -a pipe_status=(\"${{pipestatus[@]}}\")\n        exit_code=${{pipe_status[1]}}\n    else\n        WT_MANAGER_CAPTURE_CD=1 \"$wt_bin\" \"$@\" | tee \"$tmp_output\" >(grep \"^{}\" > \"$tmp_marker\") | grep -v \"^{}\"\n        local -a pipe_status=(\"${{PIPESTATUS[@]}}\")\n        exit_code=${{pipe_status[0]}}\n    fi\n    local target_dir=$(sed -n '1s/^{}//p' \"$tmp_marker\")\n\n    if [[ -n \"$target_dir\" ]]; then\n        if [[ -d \"$target_dir\" ]]; then\n            cd \"$target_dir\" || {{\n                rm -f \"$tmp_output\" \"$tmp_marker\"\n                return 1\n            }}\n            echo \"\"\n            echo \"Changed to: $(pwd)\"\n        fi\n    fi\n\n    rm -f \"$tmp_output\" \"$tmp_marker\"\n    return $exit_code\n}}\n",
+        current_exe.display(),
+        SHELL_CD_MARKER_PREFIX,
+        SHELL_CD_MARKER_PREFIX,
+        SHELL_CD_MARKER_PREFIX,
+        SHELL_CD_MARKER_PREFIX,
+        SHELL_CD_MARKER_PREFIX,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{clean_merged_worktrees, handle_delete_command};
+    use super::{
+        clean_merged_worktrees, handle_delete_command, render_shell_integration_script,
+        shell_cd_marker_line, SHELL_CD_MARKER_PREFIX,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1044,5 +1068,20 @@ mod tests {
         fs::remove_dir_all(worktree_path).unwrap();
         fs::remove_dir_all(temp_home).unwrap();
     }
-}
 
+    #[test]
+    fn shell_cd_marker_line_uses_structured_prefix() {
+        let marker = shell_cd_marker_line(Path::new("/tmp/project"));
+
+        assert_eq!(marker, format!("{}{}", SHELL_CD_MARKER_PREFIX, "/tmp/project"));
+    }
+
+    #[test]
+    fn shell_integration_script_parses_structured_cd_marker() {
+        let script = render_shell_integration_script(Path::new("/tmp/wt"));
+
+        assert!(script.contains("WT_MANAGER_CAPTURE_CD=1 \"$wt_bin\" \"$@\""));
+        assert!(script.contains(SHELL_CD_MARKER_PREFIX));
+        assert!(!script.contains("grep \"^  cd \""));
+    }
+}
