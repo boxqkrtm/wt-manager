@@ -67,7 +67,7 @@ fn main() -> Result<()> {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
         std::process::exit(0);
     })
-    .expect(messages.ctrlc_handler_error());
+    .unwrap_or_else(|_| panic!("{}", messages.ctrlc_handler_error()));
 
     let args = Args::parse();
     let current_dir = env::current_dir()?;
@@ -296,6 +296,16 @@ enum HookKind {
     PostCd,
 }
 
+struct CleanCommandOptions<'a> {
+    dry_run: bool,
+    force: bool,
+    include_untracked: bool,
+    remote: Option<&'a str>,
+    skip_fetch: bool,
+    merged: bool,
+    base: Option<&'a str>,
+}
+
 fn handle_command(cmd: Commands, current_dir: &Path) -> Result<()> {
     match cmd {
         Commands::Init => init_shell_integration(),
@@ -313,16 +323,15 @@ fn handle_command(cmd: Commands, current_dir: &Path) -> Result<()> {
             skip_fetch,
             merged,
             base,
-        } => handle_clean_command(
-            current_dir,
+        } => handle_clean_command(current_dir, CleanCommandOptions {
             dry_run,
             force,
             include_untracked,
-            remote.as_deref(),
+            remote: remote.as_deref(),
             skip_fetch,
             merged,
-            base.as_deref(),
-        ),
+            base: base.as_deref(),
+        }),
         Commands::Project { command } => match command {
             ProjectCommands::List => list_projects(),
         },
@@ -348,16 +357,15 @@ fn handle_worktree_alias_command(command: WorktreeAliasCommands, current_dir: &P
             skip_fetch,
             merged,
             base,
-        } => handle_clean_command(
-            current_dir,
+        } => handle_clean_command(current_dir, CleanCommandOptions {
             dry_run,
             force,
             include_untracked,
-            remote.as_deref(),
+            remote: remote.as_deref(),
             skip_fetch,
             merged,
-            base.as_deref(),
-        ),
+            base: base.as_deref(),
+        }),
     }
 }
 
@@ -447,32 +455,23 @@ fn handle_delete_command(current_dir: &Path, branch: &str, force: bool) -> Resul
     Ok(())
 }
 
-fn handle_clean_command(
-    current_dir: &Path,
-    dry_run: bool,
-    force: bool,
-    include_untracked: bool,
-    remote: Option<&str>,
-    skip_fetch: bool,
-    merged: bool,
-    base: Option<&str>,
-) -> Result<()> {
+fn handle_clean_command(current_dir: &Path, options: CleanCommandOptions<'_>) -> Result<()> {
     let messages = i18n::Messages::new();
     let repo_root = match get_repo_root_or_project_tui(current_dir)? {
         Some(root) => root,
         None => anyhow::bail!("{}", messages.cmd_requires_repo()),
     };
 
-    if merged {
-        clean_merged_worktrees(&repo_root, dry_run, force, base)
+    if options.merged {
+        clean_merged_worktrees(&repo_root, options.dry_run, options.force, options.base)
     } else {
         clean_stale_worktrees(
             &repo_root,
-            dry_run,
-            force,
-            include_untracked,
-            remote,
-            skip_fetch,
+            options.dry_run,
+            options.force,
+            options.include_untracked,
+            options.remote,
+            options.skip_fetch,
         )
     }
 }
@@ -678,7 +677,7 @@ fn fetch_prune_remote(repo_root: &Path, remote: Option<&str>) -> Result<()> {
     let output = cmd.current_dir(repo_root).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8(output.stderr)?;
-        let reason = messages.failed_fetch_prune().replace("{}", &stderr.trim());
+        let reason = messages.failed_fetch_prune().replace("{}", stderr.trim());
         anyhow::bail!("{}", reason);
     }
 
@@ -719,12 +718,9 @@ fn clean_stale_worktrees(
                 if !remote_ref_exists(repo_root, &value)? {
                     stale_worktrees.push((
                         wt,
-                        format!(
-                            "{}",
-                            messages
-                                .stale_upstream_missing_reason()
-                                .replace("{}", &value)
-                        ),
+                        messages
+                            .stale_upstream_missing_reason()
+                            .replace("{}", &value),
                     ));
                 }
             }
