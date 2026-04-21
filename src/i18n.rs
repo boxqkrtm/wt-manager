@@ -777,6 +777,39 @@ impl Messages {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{Language, Messages};
+
+    #[test]
+    fn setup_related_messages_have_expected_english_text() {
+        let messages = Messages::with_language(Language::English);
+
+        assert_eq!(messages.deps_installed(), "✓ Dependencies installed successfully");
+        assert_eq!(messages.pnpm_install_warning(), "Warning: Could not run pnpm install");
+        assert_eq!(messages.running_setup(), "Running automatic setup");
+        assert_eq!(messages.setup_completed_with_issues(), "Warning: Setup completed with issues.");
+        assert_eq!(messages.setup_completed(), "✓ Setup completed successfully");
+        assert_eq!(messages.output_label(), "Output");
+        assert_eq!(messages.error_output_label(), "Error output");
+        assert_eq!(messages.setup_command_error(), "Warning: Could not run setup command");
+    }
+
+    #[test]
+    fn setup_related_messages_have_expected_korean_text() {
+        let messages = Messages::with_language(Language::Korean);
+
+        assert_eq!(messages.deps_installed(), "✓ 의존성이 성공적으로 설치되었습니다");
+        assert_eq!(messages.pnpm_install_warning(), "경고: pnpm install을 실행할 수 없습니다");
+        assert_eq!(messages.running_setup(), "자동 설정 실행 중");
+        assert_eq!(messages.setup_completed_with_issues(), "경고: 설정 실행 중 문제가 있었습니다.");
+        assert_eq!(messages.setup_completed(), "✓ 설정이 성공적으로 완료되었습니다");
+        assert_eq!(messages.output_label(), "출력");
+        assert_eq!(messages.error_output_label(), "에러 출력");
+        assert_eq!(messages.setup_command_error(), "경고: 설정 명령어를 실행할 수 없습니다");
+    }
+}
+
 const LONG_HELP_EN: &str = r#"Advanced Git worktree manager for terminal users.
 
 Usage:
