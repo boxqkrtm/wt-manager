@@ -90,14 +90,10 @@ fn get_worktree_base(repo_path: &Path) -> Result<PathBuf> {
 }
 
 fn find_existing_worktree_path(repo_path: &Path, branch: &str) -> Result<Option<PathBuf>> {
-    for base in get_worktree_base_candidates(repo_path)? {
-        let candidate = base.join(branch);
-        if candidate.exists() {
-            return Ok(Some(candidate));
-        }
-    }
-
-    Ok(None)
+    Ok(git::list_worktrees(repo_path)?
+        .into_iter()
+        .find(|worktree| worktree.matches_name(branch))
+        .map(|worktree| worktree.path))
 }
 
 /// Get the full path for a worktree
@@ -188,4 +184,74 @@ pub fn handle_worktree(repo_root: &Path, branch: &str) -> Result<()> {
     switch_to_worktree(repo_root, &prepared.path)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_existing_worktree_path, get_worktree_path};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("wt-manager-{prefix}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn git(repo_root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .env("GIT_AUTHOR_NAME", "wt-manager")
+            .env("GIT_AUTHOR_EMAIL", "wt-manager@example.com")
+            .env("GIT_COMMITTER_NAME", "wt-manager")
+            .env("GIT_COMMITTER_EMAIL", "wt-manager@example.com")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {:?}", args);
+    }
+
+    fn init_repo() -> PathBuf {
+        let repo_root = make_temp_dir("repo");
+        git(&repo_root, &["init"]);
+        fs::write(repo_root.join("README.md"), "hello\n").unwrap();
+        git(&repo_root, &["add", "README.md"]);
+        git(&repo_root, &["commit", "-m", "init"]);
+        repo_root
+    }
+
+    #[test]
+    fn find_existing_worktree_path_ignores_stale_directories() {
+        let _guard = env_lock().lock().unwrap();
+        let temp_home = make_temp_dir("home");
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let repo_root = init_repo();
+        let stale_path = get_worktree_path(&repo_root, "feature").unwrap();
+        fs::create_dir_all(&stale_path).unwrap();
+
+        let found = find_existing_worktree_path(&repo_root, "feature").unwrap();
+
+        assert!(found.is_none());
+
+        match previous_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+        fs::remove_dir_all(repo_root).unwrap();
+        fs::remove_dir_all(temp_home).unwrap();
+    }
 }
