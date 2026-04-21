@@ -226,112 +226,6 @@ fn parse_worktree_list(output: &str, repo_root: &Path) -> Result<Vec<WorktreeInf
     Ok(worktrees)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{list_worktrees, parse_worktree_list, worktree_target_exists, WorktreeInfo};
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn names(worktrees: &[WorktreeInfo]) -> Vec<String> {
-        worktrees.iter().map(|worktree| worktree.name().to_string()).collect()
-    }
-
-    fn make_temp_dir(prefix: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("wt-manager-{prefix}-{unique}"));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn git(repo_root: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(repo_root)
-            .env("GIT_AUTHOR_NAME", "wt-manager")
-            .env("GIT_AUTHOR_EMAIL", "wt-manager@example.com")
-            .env("GIT_COMMITTER_NAME", "wt-manager")
-            .env("GIT_COMMITTER_EMAIL", "wt-manager@example.com")
-            .status()
-            .unwrap();
-        assert!(status.success(), "git command failed: {:?}", args);
-    }
-
-    fn init_repo() -> PathBuf {
-        let repo_root = make_temp_dir("repo");
-        git(&repo_root, &["init", "-b", "main"]);
-        fs::write(repo_root.join("README.md"), "hello\n").unwrap();
-        git(&repo_root, &["add", "README.md"]);
-        git(&repo_root, &["commit", "-m", "init"]);
-        repo_root
-    }
-
-    #[test]
-    fn parse_worktree_list_keeps_branch_worktrees() {
-        let output = "worktree /repo\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\nworktree /wt/feature\nHEAD 2222222222222222222222222222222222222222\nbranch refs/heads/feature\n\n";
-
-        let worktrees = parse_worktree_list(output, Path::new("/repo")).unwrap();
-
-        assert_eq!(names(&worktrees), vec!["main", "feature"]);
-        assert_eq!(worktrees[0].branch_name(), Some("main"));
-        assert_eq!(worktrees[1].branch_name(), Some("feature"));
-    }
-
-    #[test]
-    fn parse_worktree_list_keeps_detached_worktrees() {
-        let output = "worktree /repo\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\nworktree /wt/detached\nHEAD abcdef1234567890abcdef1234567890abcdef12\ndetached\n\n";
-
-        let worktrees = parse_worktree_list(output, Path::new("/repo")).unwrap();
-
-        assert_eq!(names(&worktrees), vec!["main", "detached@abcdef1"]);
-        assert_eq!(worktrees[1].branch_name(), None);
-        assert!(worktrees[1].matches_name("detached@abcdef1"));
-    }
-
-    #[test]
-    fn worktree_target_exists_checks_refs_before_creation() {
-        let repo_root = init_repo();
-        git(&repo_root, &["branch", "feature"]);
-
-        assert!(worktree_target_exists(&repo_root, "feature").unwrap());
-        assert!(!worktree_target_exists(&repo_root, "missing-branch").unwrap());
-
-        fs::remove_dir_all(repo_root).unwrap();
-    }
-
-    #[test]
-    fn list_worktrees_includes_live_detached_worktrees() {
-        let repo_root = init_repo();
-        let worktree_path = make_temp_dir("detached-worktree");
-        git(
-            &repo_root,
-            &[
-                "worktree",
-                "add",
-                "--detach",
-                worktree_path.to_str().unwrap(),
-                "HEAD",
-            ],
-        );
-
-        let worktrees = list_worktrees(&repo_root).unwrap();
-        let detached = worktrees
-            .iter()
-            .find(|worktree| worktree.path == worktree_path)
-            .unwrap();
-
-        assert_eq!(detached.branch_name(), None);
-        assert!(detached.name().starts_with("detached@"));
-
-        fs::remove_dir_all(worktree_path).unwrap();
-        fs::remove_dir_all(repo_root).unwrap();
-    }
-}
-
 pub fn get_repository_slug(repo_root: &Path) -> Result<Option<RepositorySlug>> {
     let output = Command::new("git")
         .arg("remote")
@@ -616,4 +510,110 @@ pub fn prune_worktrees(repo_root: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{list_worktrees, parse_worktree_list, worktree_target_exists, WorktreeInfo};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn names(worktrees: &[WorktreeInfo]) -> Vec<String> {
+        worktrees.iter().map(|worktree| worktree.name().to_string()).collect()
+    }
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("wt-manager-{prefix}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn git(repo_root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .env("GIT_AUTHOR_NAME", "wt-manager")
+            .env("GIT_AUTHOR_EMAIL", "wt-manager@example.com")
+            .env("GIT_COMMITTER_NAME", "wt-manager")
+            .env("GIT_COMMITTER_EMAIL", "wt-manager@example.com")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {:?}", args);
+    }
+
+    fn init_repo() -> PathBuf {
+        let repo_root = make_temp_dir("repo");
+        git(&repo_root, &["init", "-b", "main"]);
+        fs::write(repo_root.join("README.md"), "hello\n").unwrap();
+        git(&repo_root, &["add", "README.md"]);
+        git(&repo_root, &["commit", "-m", "init"]);
+        repo_root
+    }
+
+    #[test]
+    fn parse_worktree_list_keeps_branch_worktrees() {
+        let output = "worktree /repo\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\nworktree /wt/feature\nHEAD 2222222222222222222222222222222222222222\nbranch refs/heads/feature\n\n";
+
+        let worktrees = parse_worktree_list(output, Path::new("/repo")).unwrap();
+
+        assert_eq!(names(&worktrees), vec!["main", "feature"]);
+        assert_eq!(worktrees[0].branch_name(), Some("main"));
+        assert_eq!(worktrees[1].branch_name(), Some("feature"));
+    }
+
+    #[test]
+    fn parse_worktree_list_keeps_detached_worktrees() {
+        let output = "worktree /repo\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\nworktree /wt/detached\nHEAD abcdef1234567890abcdef1234567890abcdef12\ndetached\n\n";
+
+        let worktrees = parse_worktree_list(output, Path::new("/repo")).unwrap();
+
+        assert_eq!(names(&worktrees), vec!["main", "detached@abcdef1"]);
+        assert_eq!(worktrees[1].branch_name(), None);
+        assert!(worktrees[1].matches_name("detached@abcdef1"));
+    }
+
+    #[test]
+    fn worktree_target_exists_checks_refs_before_creation() {
+        let repo_root = init_repo();
+        git(&repo_root, &["branch", "feature"]);
+
+        assert!(worktree_target_exists(&repo_root, "feature").unwrap());
+        assert!(!worktree_target_exists(&repo_root, "missing-branch").unwrap());
+
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn list_worktrees_includes_live_detached_worktrees() {
+        let repo_root = init_repo();
+        let worktree_path = make_temp_dir("detached-worktree");
+        git(
+            &repo_root,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                worktree_path.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+
+        let worktrees = list_worktrees(&repo_root).unwrap();
+        let detached = worktrees
+            .iter()
+            .find(|worktree| worktree.path == worktree_path)
+            .unwrap();
+
+        assert_eq!(detached.branch_name(), None);
+        assert!(detached.name().starts_with("detached@"));
+
+        fs::remove_dir_all(worktree_path).unwrap();
+        fs::remove_dir_all(repo_root).unwrap();
+    }
 }

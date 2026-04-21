@@ -933,6 +933,11 @@ fn run_input_selector(
     Ok(result)
 }
 
+fn extract_worktree_name(item: &str) -> &str {
+    let item = item.split(" #").next().unwrap_or(item);
+    item.split(" (").next().unwrap_or(item)
+}
+
 #[cfg(test)]
 mod terminal_tests {
     use super::TerminalCleanup;
@@ -942,9 +947,4 @@ mod terminal_tests {
         let cleanup = TerminalCleanup;
         drop(cleanup);
     }
-}
-
-fn extract_worktree_name(item: &str) -> &str {
-    let item = item.split(" #").next().unwrap_or(item);
-    item.split(" (").next().unwrap_or(item)
 }
