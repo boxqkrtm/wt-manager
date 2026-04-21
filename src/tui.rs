@@ -1,5 +1,6 @@
 use anyhow::Result;
 use crossterm::{
+    cursor::Show,
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -22,6 +23,15 @@ use std::thread;
 use std::time::Duration;
 
 use crate::{db, git, worktree};
+
+struct TerminalCleanup;
+
+impl Drop for TerminalCleanup {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+    }
+}
 
 pub fn show_project_selector() -> Result<()> {
     let messages = crate::i18n::Messages::new();
@@ -330,6 +340,7 @@ fn run_worktree_selector(
     messages: &crate::i18n::Messages,
 ) -> Result<(SelectorAction, Vec<git::WorktreeInfo>)> {
     enable_raw_mode()?;
+    let _cleanup = TerminalCleanup;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
@@ -632,10 +643,6 @@ fn run_worktree_selector(
         }
     };
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
     Ok((result, worktrees))
 }
 
@@ -647,6 +654,7 @@ fn run_input_selector(
     messages: &crate::i18n::Messages,
 ) -> Result<SelectorAction> {
     enable_raw_mode()?;
+    let _cleanup = TerminalCleanup;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
@@ -920,11 +928,18 @@ fn run_input_selector(
         }
     };
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
     Ok(result)
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::TerminalCleanup;
+
+    #[test]
+    fn terminal_cleanup_drop_is_safe() {
+        let cleanup = TerminalCleanup;
+        drop(cleanup);
+    }
 }
 
 fn extract_worktree_name(item: &str) -> &str {
