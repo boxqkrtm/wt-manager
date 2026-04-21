@@ -228,11 +228,46 @@ fn parse_worktree_list(output: &str, repo_root: &Path) -> Result<Vec<WorktreeInf
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_worktree_list, WorktreeInfo};
-    use std::path::Path;
+    use super::{parse_worktree_list, worktree_target_exists, WorktreeInfo};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn names(worktrees: &[WorktreeInfo]) -> Vec<String> {
         worktrees.iter().map(|worktree| worktree.name().to_string()).collect()
+    }
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("wt-manager-{prefix}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn git(repo_root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .env("GIT_AUTHOR_NAME", "wt-manager")
+            .env("GIT_AUTHOR_EMAIL", "wt-manager@example.com")
+            .env("GIT_COMMITTER_NAME", "wt-manager")
+            .env("GIT_COMMITTER_EMAIL", "wt-manager@example.com")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {:?}", args);
+    }
+
+    fn init_repo() -> PathBuf {
+        let repo_root = make_temp_dir("repo");
+        git(&repo_root, &["init"]);
+        fs::write(repo_root.join("README.md"), "hello\n").unwrap();
+        git(&repo_root, &["add", "README.md"]);
+        git(&repo_root, &["commit", "-m", "init"]);
+        repo_root
     }
 
     #[test]
@@ -255,6 +290,17 @@ mod tests {
         assert_eq!(names(&worktrees), vec!["main", "detached@abcdef1"]);
         assert_eq!(worktrees[1].branch_name(), None);
         assert!(worktrees[1].matches_name("detached@abcdef1"));
+    }
+
+    #[test]
+    fn worktree_target_exists_checks_refs_before_creation() {
+        let repo_root = init_repo();
+        git(&repo_root, &["branch", "feature"]);
+
+        assert!(worktree_target_exists(&repo_root, "feature").unwrap());
+        assert!(!worktree_target_exists(&repo_root, "missing-branch").unwrap());
+
+        fs::remove_dir_all(repo_root).unwrap();
     }
 }
 
@@ -450,6 +496,18 @@ pub fn is_branch_merged_into(repo_root: &Path, branch: &str, base: &str) -> Resu
         base,
         stderr
     );
+}
+
+pub fn worktree_target_exists(repo_root: &Path, target: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("--quiet")
+        .arg(format!("{target}^{{commit}}"))
+        .current_dir(repo_root)
+        .output()?;
+
+    Ok(output.status.success())
 }
 
 pub fn run_command_in_dir(worktree_path: &Path, command: &[String]) -> Result<ExitStatus> {

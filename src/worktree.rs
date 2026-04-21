@@ -145,37 +145,31 @@ pub fn prepare_worktree(repo_root: &Path, branch: &str) -> Result<PreparedWorktr
     let wt_base = get_worktree_base(repo_root)?;
     fs::create_dir_all(&wt_base)?;
 
-    // Try to add worktree for existing branch first
-    println!(
-        "{}",
-        messages.adding_worktree_for_branch().replace("{}", branch)
-    );
-    let result = git::add_worktree(repo_root, &worktree_path, branch, false);
-
-    match result {
-        Ok(_) => {
-            println!(
-                "{}",
-                messages
-                    .worktree_added_existing_branch()
-                    .replace("{}", branch)
-            );
-        }
-        Err(_) => {
-            // Branch doesn't exist, create new one
-            println!(
-                "{}",
-                messages.branch_not_found_create_new().replace("{}", branch)
-            );
-            let err_message = messages.failed_create_worktree_context().to_string();
-            git::add_worktree(repo_root, &worktree_path, branch, true).context(err_message)?;
-            println!(
-                "{}",
-                messages
-                    .created_new_branch_with_worktree()
-                    .replace("{}", branch)
-            );
-        }
+    if git::worktree_target_exists(repo_root, branch)? {
+        println!(
+            "{}",
+            messages.adding_worktree_for_branch().replace("{}", branch)
+        );
+        git::add_worktree(repo_root, &worktree_path, branch, false)?;
+        println!(
+            "{}",
+            messages
+                .worktree_added_existing_branch()
+                .replace("{}", branch)
+        );
+    } else {
+        println!(
+            "{}",
+            messages.branch_not_found_create_new().replace("{}", branch)
+        );
+        let err_message = messages.failed_create_worktree_context().to_string();
+        git::add_worktree(repo_root, &worktree_path, branch, true).context(err_message)?;
+        println!(
+            "{}",
+            messages
+                .created_new_branch_with_worktree()
+                .replace("{}", branch)
+        );
     }
 
     db::update_last_accessed(repo_root)?;
