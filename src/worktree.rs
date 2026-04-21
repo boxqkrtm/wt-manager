@@ -226,7 +226,7 @@ mod tests {
 
     fn init_repo() -> PathBuf {
         let repo_root = make_temp_dir("repo");
-        git(&repo_root, &["init"]);
+        git(&repo_root, &["init", "-b", "main"]);
         fs::write(repo_root.join("README.md"), "hello\n").unwrap();
         git(&repo_root, &["add", "README.md"]);
         git(&repo_root, &["commit", "-m", "init"]);

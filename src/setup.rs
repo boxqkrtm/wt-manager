@@ -21,14 +21,16 @@ fn command_exists_in_path(command: &str, path: Option<&std::ffi::OsStr>) -> bool
 }
 
 fn hook_shell() -> (&'static str, &'static str) {
-    let path = env::var_os("PATH");
+    hook_shell_for_path(env::var_os("PATH").as_deref())
+}
 
-    if command_exists_in_path("zsh", path.as_deref()) {
+fn hook_shell_for_path(path: Option<&std::ffi::OsStr>) -> (&'static str, &'static str) {
+    if command_exists_in_path("zsh", path) {
         (
             "zsh",
             "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; ",
         )
-    } else if command_exists_in_path("bash", path.as_deref()) {
+    } else if command_exists_in_path("bash", path) {
         (
             "bash",
             "source ~/.bashrc 2>/dev/null || source ~/.zshrc 2>/dev/null || true; ",
@@ -144,7 +146,7 @@ impl SetupManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_exists_in_path, split_path_entries};
+    use super::{command_exists_in_path, hook_shell_for_path, split_path_entries};
     use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
@@ -177,5 +179,25 @@ mod tests {
         assert!(!command_exists_in_path("zsh", Some(path.as_os_str())));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hook_shell_prefers_zsh_then_bash_then_sh() {
+        let zsh_dir = make_temp_dir("zsh-path");
+        let bash_dir = make_temp_dir("bash-path");
+        fs::write(zsh_dir.join("zsh"), "#!/bin/sh\n").unwrap();
+        fs::write(bash_dir.join("bash"), "#!/bin/sh\n").unwrap();
+
+        let preferred = OsString::from(format!("{}:{}", zsh_dir.display(), bash_dir.display()));
+        let fallback = OsString::from(bash_dir.display().to_string());
+        let missing = OsString::from(make_temp_dir("missing-path").display().to_string());
+
+        assert_eq!(hook_shell_for_path(Some(preferred.as_os_str())).0, "zsh");
+        assert_eq!(hook_shell_for_path(Some(fallback.as_os_str())).0, "bash");
+        assert_eq!(hook_shell_for_path(Some(missing.as_os_str())).0, "sh");
+
+        fs::remove_dir_all(zsh_dir).unwrap();
+        fs::remove_dir_all(bash_dir).unwrap();
+        fs::remove_dir_all(PathBuf::from(missing)).unwrap();
     }
 }

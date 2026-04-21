@@ -228,7 +228,7 @@ fn parse_worktree_list(output: &str, repo_root: &Path) -> Result<Vec<WorktreeInf
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_worktree_list, worktree_target_exists, WorktreeInfo};
+    use super::{list_worktrees, parse_worktree_list, worktree_target_exists, WorktreeInfo};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -263,7 +263,7 @@ mod tests {
 
     fn init_repo() -> PathBuf {
         let repo_root = make_temp_dir("repo");
-        git(&repo_root, &["init"]);
+        git(&repo_root, &["init", "-b", "main"]);
         fs::write(repo_root.join("README.md"), "hello\n").unwrap();
         git(&repo_root, &["add", "README.md"]);
         git(&repo_root, &["commit", "-m", "init"]);
@@ -300,6 +300,34 @@ mod tests {
         assert!(worktree_target_exists(&repo_root, "feature").unwrap());
         assert!(!worktree_target_exists(&repo_root, "missing-branch").unwrap());
 
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn list_worktrees_includes_live_detached_worktrees() {
+        let repo_root = init_repo();
+        let worktree_path = make_temp_dir("detached-worktree");
+        git(
+            &repo_root,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                worktree_path.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+
+        let worktrees = list_worktrees(&repo_root).unwrap();
+        let detached = worktrees
+            .iter()
+            .find(|worktree| worktree.path == worktree_path)
+            .unwrap();
+
+        assert_eq!(detached.branch_name(), None);
+        assert!(detached.name().starts_with("detached@"));
+
+        fs::remove_dir_all(worktree_path).unwrap();
         fs::remove_dir_all(repo_root).unwrap();
     }
 }
