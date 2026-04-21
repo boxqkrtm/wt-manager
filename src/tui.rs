@@ -96,11 +96,11 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                 // Check for exact match (case-insensitive)
                 let exact_match = worktrees
                     .iter()
-                    .find(|wt| wt.branch.eq_ignore_ascii_case(&branch_name));
+                    .find(|wt| wt.matches_name(&branch_name));
 
                 if let Some(wt) = exact_match {
                     // Existing worktree - switch to it
-                    println!("\n{} {}", messages.switching_to_worktree(), wt.branch);
+                    println!("\n{} {}", messages.switching_to_worktree(), wt.name());
                     println!("  cd {}", wt.path.display());
 
                     crate::setup::SetupManager::run_post_cd(repo_root, &wt.path)?;
@@ -116,16 +116,16 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
             // Find the worktree to delete
             let worktree_to_delete = worktrees
                 .iter()
-                .find(|wt| wt.branch.eq_ignore_ascii_case(&branch_name));
+                .find(|wt| wt.matches_name(&branch_name));
 
             if let Some(wt) = worktree_to_delete {
                 if wt.is_main {
                     eprintln!("{}", messages.cannot_delete_main());
                 } else {
-                    println!("\n{} {}", messages.deleting_worktree(), wt.branch);
+                    println!("\n{} {}", messages.deleting_worktree(), wt.name());
                     match git::remove_worktree(repo_root, &wt.path, false) {
                         Ok(_) => {
-                            println!("{}", messages.worktree_deleted().replace("{}", &wt.branch));
+                            println!("{}", messages.worktree_deleted().replace("{}", wt.name()));
                             let _ = git::prune_worktrees(repo_root);
                         }
                         Err(e) => {
@@ -134,7 +134,7 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                             eprintln!(
                                 "{} wt delete {} --force",
                                 messages.force_delete_command(),
-                                wt.branch
+                                wt.name()
                             );
                         }
                     }
@@ -265,7 +265,11 @@ fn filter_worktrees<'a>(
     let mut matches: Vec<(&git::WorktreeInfo, i64)> = worktrees
         .iter()
         .filter_map(|worktree| {
-            let item = format_worktree_item(worktree, messages, pr_cache.get(&worktree.branch));
+            let item = format_worktree_item(
+                worktree,
+                messages,
+                worktree.branch_name().and_then(|branch| pr_cache.get(branch)),
+            );
             matcher
                 .fuzzy_match(&item, input)
                 .map(|score| (worktree, score))
@@ -284,7 +288,7 @@ fn selected_worktree_branch(
 ) -> Option<String> {
     filter_worktrees(worktrees, &state.input, matcher, messages, pr_cache)
         .get(state.selected_index)
-        .map(|(worktree, _)| worktree.branch.clone())
+        .map(|(worktree, _)| worktree.name().to_string())
 }
 
 fn worktree_status_text(
@@ -315,9 +319,9 @@ fn format_worktree_item(
     };
 
     if let Some(pr) = pull_request {
-        format!("{}{} #{} {}", worktree.branch, marker, pr.number, pr.title)
+        format!("{}{} #{} {}", worktree.name(), marker, pr.number, pr.title)
     } else {
-        worktree.branch.clone() + marker
+        worktree.name().to_string() + marker
     }
 }
 
@@ -387,7 +391,7 @@ fn run_worktree_selector(
             if let Some(selected_branch) = selected_branch_before_update {
                 if let Some(index) = filtered_worktrees
                     .iter()
-                    .position(|(worktree, _)| worktree.branch == selected_branch)
+                    .position(|(worktree, _)| worktree.name() == selected_branch)
                 {
                     state.selected_index = index;
                 }
@@ -461,7 +465,7 @@ fn run_worktree_selector(
                         ListItem::new(Line::from(vec![Span::raw(format_worktree_item(
                             worktree,
                             messages,
-                            pr_cache.get(&worktree.branch),
+                            worktree.branch_name().and_then(|branch| pr_cache.get(branch)),
                         ))]))
                     })
                     .collect(),
@@ -484,7 +488,7 @@ fn run_worktree_selector(
 
             let has_exact_match = worktrees
                 .iter()
-                .any(|worktree| worktree.branch.eq_ignore_ascii_case(&state.input));
+                .any(|worktree| worktree.matches_name(&state.input));
             let status_text = worktree_status_text(messages, &worktree_state, &pr_state);
 
             let base_help_text = if !matches!(&worktree_state, WorktreeLoadState::Loaded) {
@@ -564,9 +568,9 @@ fn run_worktree_selector(
                         if worktrees_loaded && !state.input.is_empty() {
                             if let Some(worktree) = worktrees
                                 .iter()
-                                .find(|worktree| worktree.branch.eq_ignore_ascii_case(&state.input))
+                                .find(|worktree| worktree.matches_name(&state.input))
                             {
-                                break SelectorAction::Delete(worktree.branch.clone());
+                                break SelectorAction::Delete(worktree.name().to_string());
                             }
                         }
                     }
@@ -608,7 +612,7 @@ fn run_worktree_selector(
                             if let Some((worktree, _)) =
                                 filtered_worktrees.get(state.selected_index)
                             {
-                                state.input = worktree.branch.clone();
+                                state.input = worktree.name().to_string();
                                 state.cursor_index = char_len(&state.input);
                             }
                         }
@@ -618,7 +622,7 @@ fn run_worktree_selector(
                             if let Some((worktree, _)) =
                                 filtered_worktrees.get(state.selected_index)
                             {
-                                break SelectorAction::Select(worktree.branch.clone());
+                                break SelectorAction::Select(worktree.name().to_string());
                             }
                         }
                     }

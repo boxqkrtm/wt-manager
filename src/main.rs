@@ -403,7 +403,7 @@ fn handle_delete_command(current_dir: &Path, branch: &str, force: bool) -> Resul
     let worktrees = git::list_worktrees(&repo_root)?;
     let target = worktrees
         .iter()
-        .find(|wt| wt.branch.eq_ignore_ascii_case(branch));
+        .find(|wt| wt.matches_name(branch));
 
     match target {
         Some(wt) => {
@@ -412,10 +412,10 @@ fn handle_delete_command(current_dir: &Path, branch: &str, force: bool) -> Resul
                 return Ok(());
             }
 
-            println!("\n{} {}", messages.deleting_worktree(), wt.branch);
+            println!("\n{} {}", messages.deleting_worktree(), wt.name());
             match git::remove_worktree(&repo_root, &wt.path, force) {
                 Ok(()) => {
-                    println!("{}", messages.worktree_deleted().replace("{}", &wt.branch));
+                    println!("{}", messages.worktree_deleted().replace("{}", wt.name()));
                     let _ = git::prune_worktrees(&repo_root);
                 }
                 Err(e) => {
@@ -425,7 +425,7 @@ fn handle_delete_command(current_dir: &Path, branch: &str, force: bool) -> Resul
                         eprintln!(
                             "{} wt delete {} --force",
                             messages.force_delete_command(),
-                            wt.branch
+                            wt.name()
                         );
                     }
                 }
@@ -583,10 +583,10 @@ fn list_worktrees(repo_root: &Path) -> Result<()> {
         } else {
             ""
         };
-        if let Some(pr) = pull_requests.get(&wt.branch) {
-            println!("  {}{} #{} {}", wt.branch, marker, pr.number, pr.title);
+        if let Some(pr) = wt.branch_name().and_then(|branch| pull_requests.get(branch)) {
+            println!("  {}{} #{} {}", wt.name(), marker, pr.number, pr.title);
         } else {
-            println!("  {}{}", wt.branch, marker);
+            println!("  {}{}", wt.name(), marker);
         }
         println!("    {}: {}", messages.path_label(), wt.path.display());
     }
@@ -695,7 +695,10 @@ fn clean_stale_worktrees(
 
     let mut stale_worktrees = Vec::new();
     for wt in worktrees.into_iter().filter(|wt| !wt.is_main) {
-        let upstream = branches.get(&wt.branch).cloned().flatten();
+        let Some(branch) = wt.branch_name().map(|branch| branch.to_string()) else {
+            continue;
+        };
+        let upstream = branches.get(&branch).cloned().flatten();
 
         match upstream {
             Some(value) => {
@@ -737,7 +740,7 @@ fn clean_stale_worktrees(
             .replace("{}", &stale_worktrees.len().to_string())
     );
     for (wt, reason) in &stale_worktrees {
-        println!("  {} ({})", wt.branch, reason);
+        println!("  {} ({})", wt.name(), reason);
         println!("    {}", wt.path.display());
     }
 
@@ -748,10 +751,10 @@ fn clean_stale_worktrees(
 
     let messages = i18n::Messages::new();
     for (wt, _) in stale_worktrees {
-        println!("\n{} {}", messages.deleting_worktree(), wt.branch);
+        println!("\n{} {}", messages.deleting_worktree(), wt.name());
         match git::remove_worktree(repo_root, &wt.path, force) {
             Ok(()) => {
-                println!("{}", messages.worktree_deleted().replace("{}", &wt.branch));
+                println!("{}", messages.worktree_deleted().replace("{}", wt.name()));
             }
             Err(e) => {
                 eprintln!("\n{} {}", messages.failed_to_delete(), e);
@@ -760,7 +763,7 @@ fn clean_stale_worktrees(
                     eprintln!(
                         "{} wt delete {} --force",
                         messages.force_delete_command(),
-                        wt.branch
+                        wt.name()
                     );
                 }
             }
@@ -789,10 +792,14 @@ fn clean_merged_worktrees(
 
     let mut merged_worktrees = Vec::new();
     for wt in worktrees.into_iter().filter(|wt| !wt.is_main) {
-        if wt.branch == base_branch || wt.branch == base_short {
+        let Some(branch) = wt.branch_name().map(|branch| branch.to_string()) else {
+            continue;
+        };
+
+        if branch == base_branch || branch == base_short {
             continue;
         }
-        if git::is_branch_merged_into(repo_root, &wt.branch, &base_branch)? {
+        if git::is_branch_merged_into(repo_root, &branch, &base_branch)? {
             merged_worktrees.push((
                 wt,
                 messages.merged_into().replace("{}", &base_branch),
@@ -812,7 +819,7 @@ fn clean_merged_worktrees(
             .replace("{}", &merged_worktrees.len().to_string())
     );
     for (wt, reason) in &merged_worktrees {
-        println!("  {} ({})", wt.branch, reason);
+        println!("  {} ({})", wt.name(), reason);
         println!("    {}", wt.path.display());
     }
 
@@ -822,10 +829,10 @@ fn clean_merged_worktrees(
     }
 
     for (wt, _) in merged_worktrees {
-        println!("\n{} {}", messages.deleting_worktree(), wt.branch);
+        println!("\n{} {}", messages.deleting_worktree(), wt.name());
         match git::remove_worktree(repo_root, &wt.path, force) {
             Ok(()) => {
-                println!("{}", messages.worktree_deleted().replace("{}", &wt.branch));
+                println!("{}", messages.worktree_deleted().replace("{}", wt.name()));
             }
             Err(error) => {
                 eprintln!("\n{} {}", messages.failed_to_delete(), error);
@@ -834,7 +841,7 @@ fn clean_merged_worktrees(
                     eprintln!(
                         "{} wt delete {} --force",
                         messages.force_delete_command(),
-                        wt.branch
+                        wt.name()
                     );
                 }
             }
@@ -928,6 +935,5 @@ fn init_shell_integration() -> Result<()> {
 
     Ok(())
 }
-
 
 

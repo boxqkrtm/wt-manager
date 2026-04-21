@@ -57,8 +57,23 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<WorktreeInfo>> {
 #[derive(Debug, Clone)]
 pub struct WorktreeInfo {
     pub path: PathBuf,
-    pub branch: String,
+    branch: Option<String>,
+    name: String,
     pub is_main: bool,
+}
+
+impl WorktreeInfo {
+    pub fn branch_name(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+
+    pub fn matches_name(&self, candidate: &str) -> bool {
+        self.name.eq_ignore_ascii_case(candidate)
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -109,52 +124,138 @@ fn same_worktree_path(lhs: &Path, rhs: &Path) -> bool {
     }
 }
 
+fn detached_worktree_name(head: &str) -> String {
+    let short_head: String = head.chars().take(7).collect();
+    format!("detached@{short_head}")
+}
+
+fn build_worktree_info(
+    path: PathBuf,
+    branch: Option<String>,
+    head: Option<String>,
+    detached: bool,
+    is_main: bool,
+    repo_root: &Path,
+) -> Option<WorktreeInfo> {
+    let name = match branch.as_deref() {
+        Some(branch_name) => branch_name.to_string(),
+        None if detached => detached_worktree_name(head.as_deref()?),
+        None => return None,
+    };
+
+    Some(WorktreeInfo {
+        is_main: is_main || same_worktree_path(&path, repo_root),
+        path,
+        branch,
+        name,
+    })
+}
+
 fn parse_worktree_list(output: &str, repo_root: &Path) -> Result<Vec<WorktreeInfo>> {
     let mut worktrees = Vec::new();
     let mut current_path: Option<PathBuf> = None;
     let mut current_branch: Option<String> = None;
+    let mut current_head: Option<String> = None;
+    let mut is_detached = false;
     let mut is_main = false;
 
     for line in output.lines() {
         if line.starts_with("worktree ") {
             // Save previous worktree if exists
-            if let (Some(path), Some(branch)) = (current_path.take(), current_branch.take()) {
-                worktrees.push(WorktreeInfo {
-                    is_main: is_main || same_worktree_path(&path, repo_root),
+            if let Some(path) = current_path.take() {
+                if let Some(worktree) = build_worktree_info(
                     path,
-                    branch,
-                });
+                    current_branch.take(),
+                    current_head.take(),
+                    is_detached,
+                    is_main,
+                    repo_root,
+                ) {
+                    worktrees.push(worktree);
+                }
             }
 
             current_path = Some(PathBuf::from(line.trim_start_matches("worktree ")));
+            current_branch = None;
+            current_head = None;
+            is_detached = false;
             is_main = false;
+        } else if line.starts_with("HEAD ") {
+            current_head = Some(line.trim_start_matches("HEAD ").to_string());
         } else if line.starts_with("branch ") {
             let branch = line.trim_start_matches("branch ");
             current_branch = Some(branch.trim_start_matches("refs/heads/").to_string());
+        } else if line == "detached" {
+            is_detached = true;
         } else if line.starts_with("bare") {
             is_main = true;
         } else if line.is_empty() {
             // End of worktree entry
-            if let (Some(path), Some(branch)) = (current_path.take(), current_branch.take()) {
-                worktrees.push(WorktreeInfo {
-                    is_main: is_main || same_worktree_path(&path, repo_root),
+            if let Some(path) = current_path.take() {
+                if let Some(worktree) = build_worktree_info(
                     path,
-                    branch,
-                });
+                    current_branch.take(),
+                    current_head.take(),
+                    is_detached,
+                    is_main,
+                    repo_root,
+                ) {
+                    worktrees.push(worktree);
+                }
             }
+
+            is_detached = false;
+            is_main = false;
         }
     }
 
     // Save last worktree if exists
-    if let (Some(path), Some(branch)) = (current_path, current_branch) {
-        worktrees.push(WorktreeInfo {
-            is_main: is_main || same_worktree_path(&path, repo_root),
+    if let Some(path) = current_path {
+        if let Some(worktree) = build_worktree_info(
             path,
-            branch,
-        });
+            current_branch,
+            current_head,
+            is_detached,
+            is_main,
+            repo_root,
+        ) {
+            worktrees.push(worktree);
+        }
     }
 
     Ok(worktrees)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_worktree_list, WorktreeInfo};
+    use std::path::Path;
+
+    fn names(worktrees: &[WorktreeInfo]) -> Vec<String> {
+        worktrees.iter().map(|worktree| worktree.name().to_string()).collect()
+    }
+
+    #[test]
+    fn parse_worktree_list_keeps_branch_worktrees() {
+        let output = "worktree /repo\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\nworktree /wt/feature\nHEAD 2222222222222222222222222222222222222222\nbranch refs/heads/feature\n\n";
+
+        let worktrees = parse_worktree_list(output, Path::new("/repo")).unwrap();
+
+        assert_eq!(names(&worktrees), vec!["main", "feature"]);
+        assert_eq!(worktrees[0].branch_name(), Some("main"));
+        assert_eq!(worktrees[1].branch_name(), Some("feature"));
+    }
+
+    #[test]
+    fn parse_worktree_list_keeps_detached_worktrees() {
+        let output = "worktree /repo\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\nworktree /wt/detached\nHEAD abcdef1234567890abcdef1234567890abcdef12\ndetached\n\n";
+
+        let worktrees = parse_worktree_list(output, Path::new("/repo")).unwrap();
+
+        assert_eq!(names(&worktrees), vec!["main", "detached@abcdef1"]);
+        assert_eq!(worktrees[1].branch_name(), None);
+        assert!(worktrees[1].matches_name("detached@abcdef1"));
+    }
 }
 
 pub fn get_repository_slug(repo_root: &Path) -> Result<Option<RepositorySlug>> {
