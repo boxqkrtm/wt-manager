@@ -1,9 +1,42 @@
 use anyhow::Result;
+use std::env;
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 pub struct SetupManager;
+
+fn split_path_entries(path: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    path.map(env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn command_exists_in_path(command: &str, path: Option<&std::ffi::OsStr>) -> bool {
+    split_path_entries(path)
+        .into_iter()
+        .map(|entry| entry.join(command))
+        .any(|candidate| candidate.is_file())
+}
+
+fn hook_shell() -> (&'static str, &'static str) {
+    let path = env::var_os("PATH");
+
+    if command_exists_in_path("zsh", path.as_deref()) {
+        (
+            "zsh",
+            "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; ",
+        )
+    } else if command_exists_in_path("bash", path.as_deref()) {
+        (
+            "bash",
+            "source ~/.bashrc 2>/dev/null || source ~/.zshrc 2>/dev/null || true; ",
+        )
+    } else {
+        ("sh", ". ~/.profile 2>/dev/null || true; ")
+    }
+}
 
 impl SetupManager {
     pub fn run_auto_setup(worktree_path: &Path) -> Result<()> {
@@ -75,15 +108,14 @@ impl SetupManager {
     }
 
     fn run_hooks(worktree_path: &Path, hook_name: &str, hooks: &[String]) -> Result<()> {
+        let (shell, shell_setup) = hook_shell();
+
         for hook in hooks {
             println!("Running {} hook: {}", hook_name, hook);
 
-            let output = Command::new("zsh")
+            let output = Command::new(shell)
                 .arg("-c")
-                .arg(format!(
-                    "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; {}",
-                    hook
-                ))
+                .arg(format!("{}{}", shell_setup, hook))
                 .current_dir(worktree_path)
                 .output();
 
@@ -107,5 +139,43 @@ impl SetupManager {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{command_exists_in_path, split_path_entries};
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("wt-manager-{prefix}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn split_path_entries_handles_missing_path() {
+        assert!(split_path_entries(None).is_empty());
+    }
+
+    #[test]
+    fn command_exists_in_path_checks_each_directory() {
+        let dir = make_temp_dir("path");
+        let fake_bash = dir.join("bash");
+        fs::write(&fake_bash, "#!/bin/sh\n").unwrap();
+
+        let path = OsString::from(dir.display().to_string());
+
+        assert!(command_exists_in_path("bash", Some(path.as_os_str())));
+        assert!(!command_exists_in_path("zsh", Some(path.as_os_str())));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }
