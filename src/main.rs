@@ -950,13 +950,91 @@ fn init_shell_integration() -> Result<()> {
 
 fn render_shell_integration_script(current_exe: &Path) -> String {
     format!(
-        "# wt-manager shell integration\nwt() {{\n    local wt_bin=\"{}\"\n\n    if [[ ! -f \"$wt_bin\" ]]; then\n        echo \"Error: wt binary not found. Run 'cargo install ...' and 'wt init' first.\"\n        return 1\n    fi\n\n    local tmp_output=$(mktemp)\n    local tmp_marker=$(mktemp)\n    local exit_code\n    if [[ -n \"$ZSH_VERSION\" ]]; then\n        WT_MANAGER_CAPTURE_CD=1 \"$wt_bin\" \"$@\" | tee \"$tmp_output\" >(grep \"^{}\" > \"$tmp_marker\") | grep -v \"^{}\"\n        local -a pipe_status=(\"${{pipestatus[@]}}\")\n        exit_code=${{pipe_status[1]}}\n    else\n        WT_MANAGER_CAPTURE_CD=1 \"$wt_bin\" \"$@\" | tee \"$tmp_output\" >(grep \"^{}\" > \"$tmp_marker\") | grep -v \"^{}\"\n        local -a pipe_status=(\"${{PIPESTATUS[@]}}\")\n        exit_code=${{pipe_status[0]}}\n    fi\n    local target_dir=$(sed -n '1s/^{}//p' \"$tmp_marker\")\n\n    if [[ -n \"$target_dir\" ]]; then\n        if [[ -d \"$target_dir\" ]]; then\n            cd \"$target_dir\" || {{\n                rm -f \"$tmp_output\" \"$tmp_marker\"\n                return 1\n            }}\n            echo \"\"\n            echo \"Changed to: $(pwd)\"\n        fi\n    fi\n\n    rm -f \"$tmp_output\" \"$tmp_marker\"\n    return $exit_code\n}}\n",
-        current_exe.display(),
-        SHELL_CD_MARKER_PREFIX,
-        SHELL_CD_MARKER_PREFIX,
-        SHELL_CD_MARKER_PREFIX,
-        SHELL_CD_MARKER_PREFIX,
-        SHELL_CD_MARKER_PREFIX,
+        r#"# wt-manager shell integration
+wt() {{
+    local wt_bin="{current_exe}"
+
+    if [[ ! -f "$wt_bin" ]]; then
+        echo "Error: wt binary not found. Run 'cargo install ...' and 'wt init' first."
+        return 1
+    fi
+
+    local tmp_output=$(mktemp)
+    local tmp_marker=$(mktemp)
+    local exit_code
+    if [[ -n "$ZSH_VERSION" ]]; then
+        WT_MANAGER_CAPTURE_CD=1 "$wt_bin" "$@" | tee "$tmp_output" >(grep "^{marker_prefix}" > "$tmp_marker") | grep -v "^{marker_prefix}"
+        local -a pipe_status=("${{pipestatus[@]}}")
+        exit_code=${{pipe_status[1]}}
+    else
+        WT_MANAGER_CAPTURE_CD=1 "$wt_bin" "$@" | tee "$tmp_output" >(grep "^{marker_prefix}" > "$tmp_marker") | grep -v "^{marker_prefix}"
+        local -a pipe_status=("${{PIPESTATUS[@]}}")
+        exit_code=${{pipe_status[0]}}
+    fi
+
+    if [[ $exit_code -eq 0 && -s "$tmp_marker" ]]; then
+        local target_marker=""
+        local target_dir=""
+        while IFS= read -r marker_line; do
+            target_marker="$marker_line"
+        done < "$tmp_marker"
+        target_dir="${{target_marker#{marker_prefix}}}"
+        if [[ -n "$target_dir" ]]; then
+            cd "$target_dir" || exit_code=$?
+        fi
+    fi
+
+    rm -f "$tmp_output" "$tmp_marker"
+    return "$exit_code"
+}}
+
+_wt_command_candidates() {{
+    printf '%s\n' init tui list cd run delete clean project config
+}}
+
+_wt_branch_candidates() {{
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+    git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null
+}}
+
+_wt_completion() {{
+    if [[ -n "$ZSH_VERSION" ]]; then
+        local subcommand="${{words[2]}}"
+
+        if (( CURRENT == 2 )); then
+            compadd -- $(_wt_command_candidates)
+            compadd -- $(_wt_branch_candidates)
+        elif [[ "$subcommand" == "cd" || "$subcommand" == "delete" || "$subcommand" == "run" ]] && (( CURRENT == 3 )); then
+            compadd -- $(_wt_branch_candidates)
+        elif [[ "$subcommand" == "worktree" && ( "${{words[3]}}" == "switch" || "${{words[3]}}" == "delete" || "${{words[3]}}" == "run" ) ]] && (( CURRENT == 4 )); then
+            compadd -- $(_wt_branch_candidates)
+        fi
+
+        return 0
+    fi
+
+    local cur="${{COMP_WORDS[COMP_CWORD]}}"
+    local candidates=""
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        candidates="$(_wt_command_candidates; _wt_branch_candidates)"
+    elif [[ "${{COMP_WORDS[1]}}" == "cd" || "${{COMP_WORDS[1]}}" == "delete" || "${{COMP_WORDS[1]}}" == "run" ]] && [[ $COMP_CWORD -eq 2 ]]; then
+        candidates="$(_wt_branch_candidates)"
+    elif [[ "${{COMP_WORDS[1]}}" == "worktree" && ( "${{COMP_WORDS[2]}}" == "switch" || "${{COMP_WORDS[2]}}" == "delete" || "${{COMP_WORDS[2]}}" == "run" ) ]] && [[ $COMP_CWORD -eq 3 ]]; then
+        candidates="$(_wt_branch_candidates)"
+    fi
+
+    COMPREPLY=( $(compgen -W "$candidates" -- "$cur") )
+}}
+
+if [[ -n "$ZSH_VERSION" ]] && type compdef >/dev/null 2>&1; then
+    compdef _wt_completion wt
+elif [[ -n "$BASH_VERSION" ]] && type complete >/dev/null 2>&1; then
+    complete -F _wt_completion wt
+fi
+"#,
+        current_exe = current_exe.display(),
+        marker_prefix = SHELL_CD_MARKER_PREFIX,
     )
 }
 
@@ -1079,5 +1157,55 @@ mod tests {
         assert!(script.contains("WT_MANAGER_CAPTURE_CD=1 \"$wt_bin\" \"$@\""));
         assert!(script.contains(SHELL_CD_MARKER_PREFIX));
         assert!(!script.contains("grep \"^  cd \""));
+    }
+
+    #[test]
+    fn shell_integration_script_registers_branch_completion() {
+        let script = render_shell_integration_script(Path::new("/tmp/wt"));
+
+        assert!(script.contains("git for-each-ref --format='%(refname:short)' refs/heads"));
+        assert!(script.contains("compdef _wt_completion wt"));
+        assert!(script.contains("complete -F _wt_completion wt"));
+        assert!(script.contains("COMP_CWORD -eq 1"));
+    }
+
+    #[test]
+    fn shell_integration_bash_completion_lists_existing_branches() {
+        let repo_root = init_repo();
+        git(&repo_root, &["branch", "feature/login"]);
+        git(&repo_root, &["branch", "bugfix"]);
+
+        let script_path = repo_root.join("wt-manager.sh");
+        fs::write(
+            &script_path,
+            render_shell_integration_script(Path::new("/bin/true")),
+        )
+        .unwrap();
+
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg(
+                "source \"$WT_SCRIPT\"; \
+                 COMP_WORDS=(wt feat); \
+                 COMP_CWORD=1; \
+                 _wt_completion; \
+                 printf '%s\n' \"${COMPREPLY[@]}\"",
+            )
+            .current_dir(&repo_root)
+            .env("WT_SCRIPT", &script_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "bash completion command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let completions = String::from_utf8(output.stdout).unwrap();
+        assert!(completions.lines().any(|line| line == "feature/login"));
+        assert!(!completions.lines().any(|line| line == "bugfix"));
+
+        fs::remove_dir_all(repo_root).unwrap();
     }
 }

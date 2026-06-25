@@ -31,6 +31,7 @@ source ~/.zshrc
 - `~/.wt-manager.sh`를 생성/갱신
 - `~/.zshrc`에 `source ~/.wt-manager.sh` 추가
 - `~/.bashrc`가 있으면 여기도 동일하게 추가
+- zsh/bash에서 `wt <Tab>`, `wt cd <Tab>`, `wt run <Tab>`, `wt delete <Tab>` 기존 로컬 브랜치 자동완성 등록
 
 > `~/.wt-manager.sh`는 generated file이며, `wt init` 재실행 시 갱신될 수 있습니다.
 
