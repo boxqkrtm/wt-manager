@@ -521,7 +521,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn names(worktrees: &[WorktreeInfo]) -> Vec<String> {
-        worktrees.iter().map(|worktree| worktree.name().to_string()).collect()
+        worktrees
+            .iter()
+            .map(|worktree| worktree.name().to_string())
+            .collect()
     }
 
     fn make_temp_dir(prefix: &str) -> PathBuf {
@@ -605,9 +608,10 @@ mod tests {
         );
 
         let worktrees = list_worktrees(&repo_root).unwrap();
+        let expected_path = worktree_path.canonicalize().unwrap();
         let detached = worktrees
             .iter()
-            .find(|worktree| worktree.path == worktree_path)
+            .find(|worktree| worktree.path.canonicalize().unwrap() == expected_path)
             .unwrap();
 
         assert_eq!(detached.branch_name(), None);

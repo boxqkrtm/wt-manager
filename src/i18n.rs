@@ -665,7 +665,9 @@ impl Messages {
 
     pub fn cmd_cd_about(&self) -> &'static str {
         match self.lang {
-            Language::English => "Switch to existing worktree or create one if branch does not exist",
+            Language::English => {
+                "Switch to existing worktree or create one if branch does not exist"
+            }
             Language::Korean => "기존 워크트리로 전환하거나 브랜치가 없으면 새로 생성",
         }
     }
@@ -722,7 +724,9 @@ impl Messages {
 
     pub fn arg_force_delete_help(&self) -> &'static str {
         match self.lang {
-            Language::English => "Force delete (use when normal delete fails due to uncommitted changes).",
+            Language::English => {
+                "Force delete (use when normal delete fails due to uncommitted changes)."
+            }
             Language::Korean => "강제 삭제 (미커밋 변경사항으로 인해 일반 삭제가 실패할 때 사용).",
         }
     }
@@ -750,8 +754,12 @@ impl Messages {
 
     pub fn arg_remote_help(&self) -> &'static str {
         match self.lang {
-            Language::English => "Optional remote name to check. If not set, checks all upstream remotes.",
-            Language::Korean => "확인할 원격 이름 (선택 사항). 설정하지 않으면 모든 upstream 원격을 확인합니다.",
+            Language::English => {
+                "Optional remote name to check. If not set, checks all upstream remotes."
+            }
+            Language::Korean => {
+                "확인할 원격 이름 (선택 사항). 설정하지 않으면 모든 upstream 원격을 확인합니다."
+            }
         }
     }
 
@@ -764,7 +772,9 @@ impl Messages {
 
     pub fn arg_merged_help(&self) -> &'static str {
         match self.lang {
-            Language::English => "Remove worktrees whose branch is already merged into the base branch",
+            Language::English => {
+                "Remove worktrees whose branch is already merged into the base branch"
+            }
             Language::Korean => "베이스 브랜치에 이미 머지된 브랜치의 워크트리 삭제",
         }
     }
@@ -899,27 +909,54 @@ mod tests {
     fn setup_related_messages_have_expected_english_text() {
         let messages = Messages::with_language(Language::English);
 
-        assert_eq!(messages.deps_installed(), "✓ Dependencies installed successfully");
-        assert_eq!(messages.pnpm_install_warning(), "Warning: Could not run pnpm install");
+        assert_eq!(
+            messages.deps_installed(),
+            "✓ Dependencies installed successfully"
+        );
+        assert_eq!(
+            messages.pnpm_install_warning(),
+            "Warning: Could not run pnpm install"
+        );
         assert_eq!(messages.running_setup(), "Running automatic setup");
-        assert_eq!(messages.setup_completed_with_issues(), "Warning: Setup completed with issues.");
+        assert_eq!(
+            messages.setup_completed_with_issues(),
+            "Warning: Setup completed with issues."
+        );
         assert_eq!(messages.setup_completed(), "✓ Setup completed successfully");
         assert_eq!(messages.output_label(), "Output");
         assert_eq!(messages.error_output_label(), "Error output");
-        assert_eq!(messages.setup_command_error(), "Warning: Could not run setup command");
+        assert_eq!(
+            messages.setup_command_error(),
+            "Warning: Could not run setup command"
+        );
     }
 
     #[test]
     fn setup_related_messages_have_expected_korean_text() {
         let messages = Messages::with_language(Language::Korean);
 
-        assert_eq!(messages.deps_installed(), "✓ 의존성이 성공적으로 설치되었습니다");
-        assert_eq!(messages.pnpm_install_warning(), "경고: pnpm install을 실행할 수 없습니다");
+        assert_eq!(
+            messages.deps_installed(),
+            "✓ 의존성이 성공적으로 설치되었습니다"
+        );
+        assert_eq!(
+            messages.pnpm_install_warning(),
+            "경고: pnpm install을 실행할 수 없습니다"
+        );
         assert_eq!(messages.running_setup(), "자동 설정 실행 중");
-        assert_eq!(messages.setup_completed_with_issues(), "경고: 설정 실행 중 문제가 있었습니다.");
-        assert_eq!(messages.setup_completed(), "✓ 설정이 성공적으로 완료되었습니다");
+        assert_eq!(
+            messages.setup_completed_with_issues(),
+            "경고: 설정 실행 중 문제가 있었습니다."
+        );
+        assert_eq!(
+            messages.setup_completed(),
+            "✓ 설정이 성공적으로 완료되었습니다"
+        );
         assert_eq!(messages.output_label(), "출력");
         assert_eq!(messages.error_output_label(), "에러 출력");
-        assert_eq!(messages.setup_command_error(), "경고: 설정 명령어를 실행할 수 없습니다");
+        assert_eq!(
+            messages.setup_command_error(),
+            "경고: 설정 명령어를 실행할 수 없습니다"
+        );
     }
 }

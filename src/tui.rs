@@ -105,9 +105,7 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                 worktree::handle_worktree(repo_root, &branch_name)?;
             } else {
                 // Check for exact match (case-insensitive)
-                let exact_match = worktrees
-                    .iter()
-                    .find(|wt| wt.matches_name(&branch_name));
+                let exact_match = worktrees.iter().find(|wt| wt.matches_name(&branch_name));
 
                 if let Some(wt) = exact_match {
                     // Existing worktree - switch to it
@@ -126,9 +124,7 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
         }
         SelectorAction::Delete(branch_name) => {
             // Find the worktree to delete
-            let worktree_to_delete = worktrees
-                .iter()
-                .find(|wt| wt.matches_name(&branch_name));
+            let worktree_to_delete = worktrees.iter().find(|wt| wt.matches_name(&branch_name));
 
             if let Some(wt) = worktree_to_delete {
                 if wt.is_main {
@@ -280,7 +276,9 @@ fn filter_worktrees<'a>(
             let item = format_worktree_item(
                 worktree,
                 messages,
-                worktree.branch_name().and_then(|branch| pr_cache.get(branch)),
+                worktree
+                    .branch_name()
+                    .and_then(|branch| pr_cache.get(branch)),
             );
             matcher
                 .fuzzy_match(&item, input)
@@ -478,7 +476,9 @@ fn run_worktree_selector(
                         ListItem::new(Line::from(vec![Span::raw(format_worktree_item(
                             worktree,
                             messages,
-                            worktree.branch_name().and_then(|branch| pr_cache.get(branch)),
+                            worktree
+                                .branch_name()
+                                .and_then(|branch| pr_cache.get(branch)),
                         ))]))
                     })
                     .collect(),

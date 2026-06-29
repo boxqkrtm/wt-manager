@@ -32,8 +32,9 @@ source ~/.zshrc
 - `~/.zshrc`에 `source ~/.wt-manager.sh` 추가
 - `~/.bashrc`가 있으면 여기도 동일하게 추가
 - zsh/bash에서 `wt <Tab>`, `wt cd <Tab>`, `wt run <Tab>`, `wt delete <Tab>` 기존 로컬 브랜치 자동완성 등록
+- TUI 출력은 터미널에 직접 렌더링하고, 선택 후 이동 경로는 호출별 임시 marker 파일로 전달
 
-> `~/.wt-manager.sh`는 generated file이며, `wt init` 재실행 시 갱신될 수 있습니다.
+> `~/.wt-manager.sh`는 generated file이며, `wt init` 재실행 시 갱신될 수 있습니다. marker 임시 파일은 이동 처리 후 삭제됩니다.
 
 ## 사용법
 
@@ -116,7 +117,7 @@ wt config hook remove post-create 0
 - `wt --help`에 기본 동작(`wt`, `wt <branch>`), TUI 진입(`wt tui`), 워크트리/프로젝트 명령이 노출됩니다.
 - `wt worktree switch`와 `wt <branch>`는 동작이 같습니다.
 - 삭제는 기본적으로 안전 삭제입니다. 메인 워크트리는 삭제할 수 없고, 실패 시 메시지에 `--force` 재시도 권장안이 표시됩니다.
-- 실제로 셸의 작업 디렉터리가 이동되는 것은 `wt init`이 생성하는 `~/.wt-manager.sh`의 `cd` 파싱 동작입니다.
+- 실제로 셸의 작업 디렉터리가 이동되는 것은 `wt init`이 생성하는 `~/.wt-manager.sh`가 marker 임시 파일을 읽고 `cd`를 수행하는 동작입니다.
 
 ### TUI 조작법
 
@@ -166,7 +167,7 @@ wt config hook remove post-create 0
    이 fallback은 구버전 호환 유지를 위한 동작이며, 충분한 마이그레이션 이후 제거될 수 있습니다.
 3. 새 repo entry가 처음 생성될 때 lockfile / env manager 파일 기준으로 기본 `postCreate` hook 값이 seed 될 수 있음
 4. worktree 생성/이동 시에는 파일 자동 탐지 없이 `~/.wt-manager/db.json`에 저장된 `postCreate` / `postCd` hook만 실행
-5. 실제 셸 이동은 `wt init`이 생성한 `~/.wt-manager.sh`가 `cd` 출력을 파싱해서 수행
+5. 실제 셸 이동은 `wt init`이 생성한 `~/.wt-manager.sh`가 호출별 marker 임시 파일에서 이동 경로를 읽고 `cd`한 뒤 파일을 삭제함
 
 ## 라이선스
 

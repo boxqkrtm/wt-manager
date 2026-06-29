@@ -15,14 +15,22 @@ use std::path::PathBuf;
 use std::process::Command;
 
 pub(crate) const SHELL_CD_MARKER_PREFIX: &str = "__WT_MANAGER_CD__=";
+const SHELL_CD_MARKER_FILE_ENV: &str = "WT_MANAGER_CD_MARKER_FILE";
 
 pub(crate) fn shell_cd_marker_line(path: &Path) -> String {
     format!("{}{}", SHELL_CD_MARKER_PREFIX, path.display())
 }
 
 pub(crate) fn maybe_print_shell_cd_marker(path: &Path) {
-    if env::var_os("WT_MANAGER_CAPTURE_CD").is_some() {
-        println!("{}", shell_cd_marker_line(path));
+    if env::var_os("WT_MANAGER_CAPTURE_CD").is_none() {
+        return;
+    }
+
+    let marker = shell_cd_marker_line(path);
+    if let Some(marker_file) = env::var_os(SHELL_CD_MARKER_FILE_ENV) {
+        let _ = fs::write(marker_file, format!("{marker}\n"));
+    } else {
+        println!("{marker}");
     }
 }
 
@@ -323,15 +331,18 @@ fn handle_command(cmd: Commands, current_dir: &Path) -> Result<()> {
             skip_fetch,
             merged,
             base,
-        } => handle_clean_command(current_dir, CleanCommandOptions {
-            dry_run,
-            force,
-            include_untracked,
-            remote: remote.as_deref(),
-            skip_fetch,
-            merged,
-            base: base.as_deref(),
-        }),
+        } => handle_clean_command(
+            current_dir,
+            CleanCommandOptions {
+                dry_run,
+                force,
+                include_untracked,
+                remote: remote.as_deref(),
+                skip_fetch,
+                merged,
+                base: base.as_deref(),
+            },
+        ),
         Commands::Project { command } => match command {
             ProjectCommands::List => list_projects(),
         },
@@ -357,15 +368,18 @@ fn handle_worktree_alias_command(command: WorktreeAliasCommands, current_dir: &P
             skip_fetch,
             merged,
             base,
-        } => handle_clean_command(current_dir, CleanCommandOptions {
-            dry_run,
-            force,
-            include_untracked,
-            remote: remote.as_deref(),
-            skip_fetch,
-            merged,
-            base: base.as_deref(),
-        }),
+        } => handle_clean_command(
+            current_dir,
+            CleanCommandOptions {
+                dry_run,
+                force,
+                include_untracked,
+                remote: remote.as_deref(),
+                skip_fetch,
+                merged,
+                base: base.as_deref(),
+            },
+        ),
     }
 }
 
@@ -421,9 +435,7 @@ fn handle_delete_command(current_dir: &Path, branch: &str, force: bool) -> Resul
     };
 
     let worktrees = git::list_worktrees(&repo_root)?;
-    let target = worktrees
-        .iter()
-        .find(|wt| wt.matches_name(branch));
+    let target = worktrees.iter().find(|wt| wt.matches_name(branch));
 
     let Some(wt) = target else {
         anyhow::bail!("{}", messages.cannot_find_worktree().replace("{}", branch));
@@ -520,11 +532,16 @@ fn handle_config_command(command: ConfigCommands, current_dir: &Path) -> Result<
             }
             CopyCommands::Remove { path } => {
                 if db::remove_copy_file(&repo_root, &path)? {
-                    println!("{}", messages.config_removed_copy_file().replace("{}", &path));
+                    println!(
+                        "{}",
+                        messages.config_removed_copy_file().replace("{}", &path)
+                    );
                 } else {
                     println!(
                         "{}",
-                        messages.config_copy_file_not_configured().replace("{}", &path)
+                        messages
+                            .config_copy_file_not_configured()
+                            .replace("{}", &path)
                     );
                 }
                 Ok(())
@@ -590,7 +607,10 @@ fn list_worktrees(repo_root: &Path) -> Result<()> {
         } else {
             ""
         };
-        if let Some(pr) = wt.branch_name().and_then(|branch| pull_requests.get(branch)) {
+        if let Some(pr) = wt
+            .branch_name()
+            .and_then(|branch| pull_requests.get(branch))
+        {
             println!("  {}{} #{} {}", wt.name(), marker, pr.number, pr.title);
         } else {
             println!("  {}{}", wt.name(), marker);
@@ -809,10 +829,7 @@ fn clean_merged_worktrees(
             continue;
         }
         if git::is_branch_merged_into(repo_root, &branch, &base_branch)? {
-            merged_worktrees.push((
-                wt,
-                messages.merged_into().replace("{}", &base_branch),
-            ));
+            merged_worktrees.push((wt, messages.merged_into().replace("{}", &base_branch)));
         }
     }
 
@@ -890,7 +907,8 @@ fn list_projects() -> Result<()> {
 
 fn init_shell_integration() -> Result<()> {
     let messages = i18n::Messages::new();
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("{}", messages.failed_get_home_dir()))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("{}", messages.failed_get_home_dir()))?;
     let shell_integration_path = home.join(".wt-manager.sh");
     let current_exe = env::current_exe()?;
     let script = render_shell_integration_script(&current_exe);
@@ -926,7 +944,12 @@ fn init_shell_integration() -> Result<()> {
                 .any(|line| line.trim() == "source ~/.wt-manager.sh");
 
         if already_configured {
-            println!("{}", messages.init_already_configured().replace("{}", &rc_path.display().to_string()));
+            println!(
+                "{}",
+                messages
+                    .init_already_configured()
+                    .replace("{}", &rc_path.display().to_string())
+            );
             continue;
         }
 
@@ -936,11 +959,21 @@ fn init_shell_integration() -> Result<()> {
         }
         rewritten.push_str("# wt-manager shell integration\nsource ~/.wt-manager.sh\n");
         fs::write(&rc_path, rewritten)?;
-        println!("{}", messages.init_updated().replace("{}", &rc_path.display().to_string()));
+        println!(
+            "{}",
+            messages
+                .init_updated()
+                .replace("{}", &rc_path.display().to_string())
+        );
         updated_any = true;
     }
 
-    println!("{}", messages.init_generated().replace("{}", &shell_integration_path.display().to_string()));
+    println!(
+        "{}",
+        messages
+            .init_generated()
+            .replace("{}", &shell_integration_path.display().to_string())
+    );
     if !updated_any {
         println!("{}", messages.init_already_set_up());
     }
@@ -959,18 +992,11 @@ wt() {{
         return 1
     fi
 
-    local tmp_output=$(mktemp)
     local tmp_marker=$(mktemp)
     local exit_code
-    if [[ -n "$ZSH_VERSION" ]]; then
-        WT_MANAGER_CAPTURE_CD=1 "$wt_bin" "$@" | tee "$tmp_output" >(grep "^{marker_prefix}" > "$tmp_marker") | grep -v "^{marker_prefix}"
-        local -a pipe_status=("${{pipestatus[@]}}")
-        exit_code=${{pipe_status[1]}}
-    else
-        WT_MANAGER_CAPTURE_CD=1 "$wt_bin" "$@" | tee "$tmp_output" >(grep "^{marker_prefix}" > "$tmp_marker") | grep -v "^{marker_prefix}"
-        local -a pipe_status=("${{PIPESTATUS[@]}}")
-        exit_code=${{pipe_status[0]}}
-    fi
+
+    WT_MANAGER_CAPTURE_CD=1 {marker_file_env}="$tmp_marker" "$wt_bin" "$@"
+    exit_code=$?
 
     if [[ $exit_code -eq 0 && -s "$tmp_marker" ]]; then
         local target_marker=""
@@ -984,7 +1010,7 @@ wt() {{
         fi
     fi
 
-    rm -f "$tmp_output" "$tmp_marker"
+    rm -f "$tmp_marker"
     return "$exit_code"
 }}
 
@@ -1035,16 +1061,19 @@ fi
 "#,
         current_exe = current_exe.display(),
         marker_prefix = SHELL_CD_MARKER_PREFIX,
+        marker_file_env = SHELL_CD_MARKER_FILE_ENV,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_merged_worktrees, handle_delete_command, render_shell_integration_script,
-        shell_cd_marker_line, SHELL_CD_MARKER_PREFIX,
+        clean_merged_worktrees, handle_delete_command, maybe_print_shell_cd_marker,
+        render_shell_integration_script, shell_cd_marker_line, SHELL_CD_MARKER_FILE_ENV,
+        SHELL_CD_MARKER_PREFIX,
     };
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::{Mutex, OnceLock};
@@ -1098,7 +1127,13 @@ mod tests {
         let worktree_path = temp_home.join("feature-wt");
         git(
             &repo_root,
-            &["worktree", "add", worktree_path.to_str().unwrap(), "-b", "feature"],
+            &[
+                "worktree",
+                "add",
+                worktree_path.to_str().unwrap(),
+                "-b",
+                "feature",
+            ],
         );
         fs::write(worktree_path.join("dirty.txt"), "dirty\n").unwrap();
 
@@ -1126,7 +1161,13 @@ mod tests {
         let worktree_path = temp_home.join("feature-wt");
         git(
             &repo_root,
-            &["worktree", "add", worktree_path.to_str().unwrap(), "-b", "feature"],
+            &[
+                "worktree",
+                "add",
+                worktree_path.to_str().unwrap(),
+                "-b",
+                "feature",
+            ],
         );
         fs::write(worktree_path.join("dirty.txt"), "dirty\n").unwrap();
 
@@ -1147,16 +1188,97 @@ mod tests {
     fn shell_cd_marker_line_uses_structured_prefix() {
         let marker = shell_cd_marker_line(Path::new("/tmp/project"));
 
-        assert_eq!(marker, format!("{}{}", SHELL_CD_MARKER_PREFIX, "/tmp/project"));
+        assert_eq!(
+            marker,
+            format!("{}{}", SHELL_CD_MARKER_PREFIX, "/tmp/project")
+        );
     }
 
     #[test]
-    fn shell_integration_script_parses_structured_cd_marker() {
+    fn maybe_print_shell_cd_marker_writes_marker_file_when_configured() {
+        let _guard = env_lock().lock().unwrap();
+        let temp_dir = make_temp_dir("marker-file");
+        let marker_file = temp_dir.join("cd-marker");
+        let previous_capture = std::env::var_os("WT_MANAGER_CAPTURE_CD");
+        let previous_marker_file = std::env::var_os(SHELL_CD_MARKER_FILE_ENV);
+        std::env::set_var("WT_MANAGER_CAPTURE_CD", "1");
+        std::env::set_var(SHELL_CD_MARKER_FILE_ENV, &marker_file);
+
+        maybe_print_shell_cd_marker(Path::new("/tmp/project"));
+
+        let marker = fs::read_to_string(&marker_file).unwrap();
+        assert_eq!(
+            marker,
+            format!("{}{}\n", SHELL_CD_MARKER_PREFIX, "/tmp/project")
+        );
+
+        match previous_capture {
+            Some(value) => std::env::set_var("WT_MANAGER_CAPTURE_CD", value),
+            None => std::env::remove_var("WT_MANAGER_CAPTURE_CD"),
+        }
+        match previous_marker_file {
+            Some(value) => std::env::set_var(SHELL_CD_MARKER_FILE_ENV, value),
+            None => std::env::remove_var(SHELL_CD_MARKER_FILE_ENV),
+        }
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn shell_integration_script_uses_marker_file_without_piping_stdout() {
         let script = render_shell_integration_script(Path::new("/tmp/wt"));
 
-        assert!(script.contains("WT_MANAGER_CAPTURE_CD=1 \"$wt_bin\" \"$@\""));
+        assert!(script.contains(
+            "WT_MANAGER_CAPTURE_CD=1 WT_MANAGER_CD_MARKER_FILE=\"$tmp_marker\" \"$wt_bin\" \"$@\""
+        ));
         assert!(script.contains(SHELL_CD_MARKER_PREFIX));
+        assert!(!script.contains("| tee"));
+        assert!(!script.contains("| grep"));
         assert!(!script.contains("grep \"^  cd \""));
+    }
+
+    #[test]
+    fn shell_integration_changes_directory_from_marker_file() {
+        let temp_dir = make_temp_dir("shell-marker");
+        let target_dir = temp_dir.join("target");
+        fs::create_dir_all(&target_dir).unwrap();
+        let fake_bin = temp_dir.join("fake-wt");
+        fs::write(
+            &fake_bin,
+            format!(
+                "#!/bin/sh\nprintf 'visible-output\\n'\nprintf '{}{}\\n' > \"${}\"\n",
+                SHELL_CD_MARKER_PREFIX,
+                target_dir.display(),
+                SHELL_CD_MARKER_FILE_ENV
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_bin, permissions).unwrap();
+
+        let script_path = temp_dir.join("wt-manager.sh");
+        fs::write(&script_path, render_shell_integration_script(&fake_bin)).unwrap();
+
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg("source \"$WT_SCRIPT\"; wt; printf 'PWD=%s\n' \"$PWD\"")
+            .current_dir(&temp_dir)
+            .env("WT_SCRIPT", &script_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "shell integration command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.lines().any(|line| line == "visible-output"));
+        assert!(stdout
+            .lines()
+            .any(|line| line == format!("PWD={}", target_dir.display())));
+
+        fs::remove_dir_all(temp_dir).unwrap();
     }
 
     #[test]

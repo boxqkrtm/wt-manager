@@ -7,10 +7,7 @@ use std::process::Command;
 pub struct SetupManager;
 
 fn split_path_entries(path: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
-    path.map(env::split_paths)
-        .into_iter()
-        .flatten()
-        .collect()
+    path.map(env::split_paths).into_iter().flatten().collect()
 }
 
 fn command_exists_in_path(command: &str, path: Option<&std::ffi::OsStr>) -> bool {
