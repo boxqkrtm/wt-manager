@@ -96,10 +96,46 @@ fn find_existing_worktree_path(repo_path: &Path, branch: &str) -> Result<Option<
         .map(|worktree| worktree.path))
 }
 
+#[cfg(windows)]
+fn windows_worktree_component(branch: &str) -> String {
+    const MAX_SLUG_LENGTH: usize = 48;
+
+    let mut slug = String::with_capacity(MAX_SLUG_LENGTH);
+    for character in branch.chars() {
+        let mapped = match character {
+            character if character.is_ascii_alphanumeric() => character.to_ascii_lowercase(),
+            '-' | '_' => character,
+            _ => '-',
+        };
+
+        if mapped == '-' && slug.ends_with('-') {
+            continue;
+        }
+        if slug.len() == MAX_SLUG_LENGTH {
+            break;
+        }
+        slug.push(mapped);
+    }
+
+    let slug = slug.trim_matches(|character| matches!(character, '-' | '_'));
+    let slug = if slug.is_empty() { "branch" } else { slug };
+    format!("{slug}-{}", short_hash(branch, 16))
+}
+
 /// Get the full path for a worktree
+#[cfg(windows)]
+fn branch_worktree_relative_path(branch: &str) -> PathBuf {
+    PathBuf::from(windows_worktree_component(branch))
+}
+
+#[cfg(not(windows))]
+fn branch_worktree_relative_path(branch: &str) -> PathBuf {
+    PathBuf::from(branch)
+}
+
 fn get_worktree_path(repo_path: &Path, branch: &str) -> Result<PathBuf> {
     let wt_base = get_worktree_base(repo_path)?;
-    Ok(wt_base.join(branch))
+    Ok(wt_base.join(branch_worktree_relative_path(branch)))
 }
 
 /// Change to the worktree directory and run setup
@@ -114,7 +150,7 @@ fn switch_to_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
     );
     println!("\n{}", messages.switch_to_worktree_guide());
     crate::maybe_print_shell_cd_marker(worktree_path);
-    println!("  cd {}", worktree_path.display());
+    crate::print_cd_command(worktree_path);
 
     crate::setup::SetupManager::run_post_cd(repo_root, worktree_path)?;
     crate::setup::SetupManager::run_auto_setup(worktree_path)?;
@@ -189,6 +225,8 @@ pub fn handle_worktree(repo_root: &Path, branch: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::windows_worktree_component;
     use super::{find_existing_worktree_path, get_worktree_path};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -254,5 +292,32 @@ mod tests {
         }
         fs::remove_dir_all(repo_root).unwrap();
         fs::remove_dir_all(temp_home).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_branch_paths_are_single_safe_stable_components() {
+        let feature = windows_worktree_component("feature/foo");
+        let reserved = windows_worktree_component("CON");
+        let forbidden = windows_worktree_component("a|b");
+        let lower = windows_worktree_component("feature");
+        let upper = windows_worktree_component("FEATURE");
+
+        assert!(feature.starts_with("feature-foo-"));
+        assert!(reserved.starts_with("con-"));
+        assert!(forbidden.starts_with("a-b-"));
+        assert_ne!(lower, upper);
+
+        for component in [feature, reserved, forbidden, lower, upper] {
+            assert!(component.is_ascii());
+            assert!(component.len() <= 65);
+            assert_eq!(Path::new(&component).components().count(), 1);
+            assert!(!component.chars().any(|character| {
+                matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+            }));
+            assert!(!component.ends_with(|character| matches!(character, '.' | ' ')));
+        }
     }
 }

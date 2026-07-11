@@ -437,10 +437,25 @@ pub fn run_command_in_dir(worktree_path: &Path, command: &[String]) -> Result<Ex
         anyhow::bail!("No command provided");
     }
 
-    Ok(Command::new(&command[0])
-        .args(&command[1..])
-        .current_dir(worktree_path)
-        .status()?)
+    #[cfg(windows)]
+    {
+        let executable = crate::process::resolve_executable(command[0].as_ref())
+            .ok_or_else(|| anyhow::anyhow!("Command not found: '{}'", command[0]))?;
+        return Command::new(executable)
+            .args(&command[1..])
+            .current_dir(worktree_path)
+            .status()
+            .with_context(|| format!("Failed to run command '{}'", command[0]));
+    }
+
+    #[cfg(not(windows))]
+    {
+        Command::new(&command[0])
+            .args(&command[1..])
+            .current_dir(worktree_path)
+            .status()
+            .with_context(|| format!("Failed to run command '{}'", command[0]))
+    }
 }
 
 /// Add a new worktree
@@ -514,6 +529,8 @@ pub fn prune_worktrees(repo_root: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::run_command_in_dir;
     use super::{list_worktrees, parse_worktree_list, worktree_target_exists, WorktreeInfo};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -619,5 +636,51 @@ mod tests {
 
         fs::remove_dir_all(worktree_path).unwrap();
         fs::remove_dir_all(repo_root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn run_command_in_dir_executes_cmd_with_original_arguments() {
+        let worktree_path = make_temp_dir("cmd-worktree");
+        let script_path = worktree_path.join("argv-probe.cmd");
+        fs::write(
+            &script_path,
+            concat!(
+                "@echo off\r\n",
+                "if not \"%~1\"==\"alpha\" exit /b 11\r\n",
+                "if not \"%~2\"==\"two words\" exit /b 12\r\n",
+                "if not \"%~3\"==\"--flag=value\" exit /b 13\r\n",
+                "exit /b 0\r\n",
+            ),
+        )
+        .unwrap();
+        let command = vec![
+            script_path
+                .with_extension("")
+                .to_string_lossy()
+                .into_owned(),
+            "alpha".to_string(),
+            "two words".to_string(),
+            "--flag=value".to_string(),
+        ];
+
+        let status = run_command_in_dir(&worktree_path, &command).unwrap();
+
+        assert!(status.success(), "batch command exited with {status}");
+        fs::remove_dir_all(worktree_path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn run_command_in_dir_reports_missing_command_name() {
+        let worktree_path = make_temp_dir("missing-command");
+        let command_name = "wt-manager-command-that-does-not-exist";
+
+        let error = run_command_in_dir(&worktree_path, &[command_name.to_string()]).unwrap_err();
+
+        assert!(
+            error.to_string().contains(command_name),
+            "missing command error did not include its name: {error:#}"
+        );
+        fs::remove_dir_all(worktree_path).unwrap();
     }
 }

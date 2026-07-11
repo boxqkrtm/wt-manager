@@ -1,6 +1,7 @@
 mod db;
 mod git;
 mod i18n;
+mod process;
 mod setup;
 mod tui;
 mod worktree;
@@ -32,6 +33,19 @@ pub(crate) fn maybe_print_shell_cd_marker(path: &Path) {
     } else {
         println!("{marker}");
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn print_cd_command(path: &Path) {
+    println!(
+        "  Set-Location -LiteralPath {}",
+        powershell_single_quoted_literal(path)
+    );
+}
+
+#[cfg(unix)]
+pub(crate) fn print_cd_command(path: &Path) {
+    println!("  cd {}", path.display());
 }
 
 #[derive(Parser, Debug)]
@@ -118,7 +132,10 @@ fn handle_legacy_branch(branch: &str, current_dir: &Path) -> Result<()> {
 #[derive(Subcommand, Debug)]
 enum Commands {
     #[command(about = cmd_init_about())]
-    Init,
+    Init {
+        #[arg(long, value_name = "PATH", help = arg_profile_help())]
+        profile: Option<PathBuf>,
+    },
     #[command(about = cmd_tui_about())]
     Tui,
     #[command(hide = true)]
@@ -177,6 +194,9 @@ enum Commands {
 
 fn cmd_init_about() -> &'static str {
     i18n::Messages::new().cmd_init_about()
+}
+fn arg_profile_help() -> &'static str {
+    i18n::Messages::new().arg_profile_help()
 }
 fn cmd_tui_about() -> &'static str {
     i18n::Messages::new().cmd_tui_about()
@@ -316,7 +336,7 @@ struct CleanCommandOptions<'a> {
 
 fn handle_command(cmd: Commands, current_dir: &Path) -> Result<()> {
     match cmd {
-        Commands::Init => init_shell_integration(),
+        Commands::Init { profile } => init_shell_integration(profile),
         Commands::Tui => handle_default(current_dir),
         Commands::Worktree { command } => handle_worktree_alias_command(command, current_dir),
         Commands::List => handle_list_command(current_dir),
@@ -905,12 +925,14 @@ fn list_projects() -> Result<()> {
     Ok(())
 }
 
-fn init_shell_integration() -> Result<()> {
+#[cfg(unix)]
+fn init_shell_integration(_profile: Option<PathBuf>) -> Result<()> {
     let messages = i18n::Messages::new();
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("{}", messages.failed_get_home_dir()))?;
     let shell_integration_path = home.join(".wt-manager.sh");
     let current_exe = env::current_exe()?;
+    let current_exe = process::resolve_executable(current_exe.as_os_str()).unwrap_or(current_exe);
     let script = render_shell_integration_script(&current_exe);
     fs::write(&shell_integration_path, script)?;
 
@@ -981,6 +1003,329 @@ fn init_shell_integration() -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+const POWERSHELL_PROFILE_BLOCK_START: &str = "# >>> wt-manager PowerShell integration >>>";
+#[cfg(windows)]
+const POWERSHELL_PROFILE_BLOCK_END: &str = "# <<< wt-manager PowerShell integration <<<";
+
+#[cfg(windows)]
+fn init_shell_integration(profile: Option<PathBuf>) -> Result<()> {
+    let profile = profile.ok_or_else(|| {
+        anyhow::anyhow!(
+            "PowerShell integration requires an explicit profile path. Run: wt init --profile $PROFILE\ncmd.exe shell integration is not supported."
+        )
+    })?;
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine the home directory"))?;
+    let current_exe = env::current_exe()?;
+    let current_exe = process::resolve_executable(current_exe.as_os_str()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Failed to resolve the absolute wt.exe path: {}",
+            current_exe.display()
+        )
+    })?;
+
+    install_powershell_integration(&home, &profile, &current_exe)
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProfileEncoding {
+    Utf8Bom,
+    Utf8,
+    Utf16Le,
+    Utf16Be,
+}
+
+#[cfg(windows)]
+fn decode_powershell_profile(bytes: &[u8]) -> Result<(String, ProfileEncoding)> {
+    if bytes.is_empty() {
+        return Ok((String::new(), ProfileEncoding::Utf8Bom));
+    }
+    if let Some(payload) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        return String::from_utf8(payload.to_vec())
+            .map(|content| (content, ProfileEncoding::Utf8Bom))
+            .map_err(|_| anyhow::anyhow!("PowerShell profile has an invalid UTF-8 BOM encoding"));
+    }
+    if bytes.starts_with(&[0xff, 0xfe, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xfe, 0xff])
+    {
+        anyhow::bail!("Unsupported PowerShell profile encoding; UTF-32 profiles are not modified");
+    }
+    if let Some(payload) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        if payload.len() % 2 != 0 {
+            anyhow::bail!("PowerShell profile has a truncated UTF-16LE encoding");
+        }
+        let units = payload
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16(&units)
+            .map(|content| (content, ProfileEncoding::Utf16Le))
+            .map_err(|_| anyhow::anyhow!("PowerShell profile has an invalid UTF-16LE encoding"));
+    }
+    if let Some(payload) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        if payload.len() % 2 != 0 {
+            anyhow::bail!("PowerShell profile has a truncated UTF-16BE encoding");
+        }
+        let units = payload
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16(&units)
+            .map(|content| (content, ProfileEncoding::Utf16Be))
+            .map_err(|_| anyhow::anyhow!("PowerShell profile has an invalid UTF-16BE encoding"));
+    }
+
+    if bytes.contains(&0) {
+        anyhow::bail!(
+            "Unsupported PowerShell profile encoding; UTF-16 and UTF-32 profiles require a byte-order mark"
+        );
+    }
+
+    String::from_utf8(bytes.to_vec())
+        .map(|content| (content, ProfileEncoding::Utf8))
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Unsupported PowerShell profile encoding; expected UTF-8, UTF-8 BOM, UTF-16LE BOM, or UTF-16BE BOM"
+            )
+        })
+}
+
+#[cfg(windows)]
+fn encode_powershell_profile(content: &str, encoding: ProfileEncoding) -> Vec<u8> {
+    match encoding {
+        ProfileEncoding::Utf8Bom => {
+            let mut bytes = Vec::with_capacity(content.len() + 3);
+            bytes.extend_from_slice(&[0xef, 0xbb, 0xbf]);
+            bytes.extend_from_slice(content.as_bytes());
+            bytes
+        }
+        ProfileEncoding::Utf8 => content.as_bytes().to_vec(),
+        ProfileEncoding::Utf16Le => {
+            let mut bytes = vec![0xff, 0xfe];
+            for unit in content.encode_utf16() {
+                bytes.extend_from_slice(&unit.to_le_bytes());
+            }
+            bytes
+        }
+        ProfileEncoding::Utf16Be => {
+            let mut bytes = vec![0xfe, 0xff];
+            for unit in content.encode_utf16() {
+                bytes.extend_from_slice(&unit.to_be_bytes());
+            }
+            bytes
+        }
+    }
+}
+
+#[cfg(windows)]
+fn powershell_single_quoted_literal(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
+}
+
+#[cfg(windows)]
+fn update_powershell_profile(content: &str, integration_path: &Path) -> Result<String> {
+    let newline = if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut rewritten = String::with_capacity(content.len() + 256);
+    let mut inside_block = false;
+
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']).trim();
+        if trimmed == POWERSHELL_PROFILE_BLOCK_START {
+            if inside_block {
+                anyhow::bail!("PowerShell profile contains a nested wt-manager integration block");
+            }
+            inside_block = true;
+            continue;
+        }
+        if trimmed == POWERSHELL_PROFILE_BLOCK_END {
+            if !inside_block {
+                anyhow::bail!(
+                    "PowerShell profile contains an unmatched wt-manager integration marker"
+                );
+            }
+            inside_block = false;
+            continue;
+        }
+        if !inside_block {
+            rewritten.push_str(line);
+        }
+    }
+    if inside_block {
+        anyhow::bail!("PowerShell profile contains an incomplete wt-manager integration block");
+    }
+
+    if !rewritten.is_empty() && !rewritten.ends_with('\n') {
+        rewritten.push_str(newline);
+    }
+    rewritten.push_str(POWERSHELL_PROFILE_BLOCK_START);
+    rewritten.push_str(newline);
+    rewritten.push_str(". ");
+    rewritten.push_str(&powershell_single_quoted_literal(integration_path));
+    rewritten.push_str(newline);
+    rewritten.push_str(POWERSHELL_PROFILE_BLOCK_END);
+    rewritten.push_str(newline);
+    Ok(rewritten)
+}
+
+#[cfg(windows)]
+fn write_utf8_bom(path: &Path, content: &str) -> Result<()> {
+    let mut bytes = Vec::with_capacity(content.len() + 3);
+    bytes.extend_from_slice(&[0xef, 0xbb, 0xbf]);
+    bytes.extend_from_slice(content.as_bytes());
+    fs::write(path, bytes)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn install_powershell_integration(home: &Path, profile: &Path, current_exe: &Path) -> Result<()> {
+    let profile_bytes = if profile.exists() {
+        fs::read(profile)?
+    } else {
+        Vec::new()
+    };
+    let (profile_content, encoding) = decode_powershell_profile(&profile_bytes)?;
+    let integration_path = home.join(".wt-manager.ps1");
+    let rewritten_profile = update_powershell_profile(&profile_content, &integration_path)?;
+    let script = render_powershell_integration_script(current_exe)?;
+
+    fs::create_dir_all(home)?;
+    if let Some(parent) = profile.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_utf8_bom(&integration_path, &script)?;
+
+    let rewritten_bytes = encode_powershell_profile(&rewritten_profile, encoding);
+    if rewritten_bytes != profile_bytes {
+        fs::write(profile, rewritten_bytes)?;
+        println!("Updated PowerShell profile: {}", profile.display());
+    } else {
+        println!(
+            "PowerShell profile is already configured: {}",
+            profile.display()
+        );
+    }
+    println!(
+        "Generated PowerShell integration: {}",
+        integration_path.display()
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn render_powershell_integration_script(current_exe: &Path) -> Result<String> {
+    if !current_exe.is_absolute() {
+        anyhow::bail!("PowerShell integration requires an absolute wt.exe path");
+    }
+
+    let template = r#"# wt-manager PowerShell integration
+function global:wt {
+    $wtBin = __WT_EXECUTABLE__
+    if (-not (Test-Path -LiteralPath $wtBin -PathType Leaf)) {
+        Write-Error "wt executable not found: $wtBin"
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $markerFile = [IO.Path]::GetTempFileName()
+    $hadCapture = Test-Path Env:WT_MANAGER_CAPTURE_CD
+    $hadMarkerFile = Test-Path Env:WT_MANAGER_CD_MARKER_FILE
+    $oldCapture = [Environment]::GetEnvironmentVariable('WT_MANAGER_CAPTURE_CD', 'Process')
+    $oldMarkerFile = [Environment]::GetEnvironmentVariable('WT_MANAGER_CD_MARKER_FILE', 'Process')
+    $exitCode = 1
+
+    try {
+        [Environment]::SetEnvironmentVariable('WT_MANAGER_CAPTURE_CD', '1', 'Process')
+        [Environment]::SetEnvironmentVariable('WT_MANAGER_CD_MARKER_FILE', $markerFile, 'Process')
+        & $wtBin @args
+        $exitCode = $LASTEXITCODE
+
+        if ($exitCode -eq 0 -and [IO.File]::Exists($markerFile)) {
+            $utf8 = New-Object Text.UTF8Encoding($false, $true)
+            $marker = [IO.File]::ReadAllText($markerFile, $utf8).TrimEnd([char[]]"`r`n")
+            if ($marker.StartsWith('__WT_MARKER_PREFIX__', [StringComparison]::Ordinal)) {
+                $targetPath = $marker.Substring('__WT_MARKER_PREFIX__'.Length)
+                if ($targetPath.Length -gt 0) {
+                    Set-Location -LiteralPath $targetPath
+                }
+            }
+        }
+    }
+    catch {
+        Write-Error -ErrorRecord $_
+        $exitCode = 1
+    }
+    finally {
+        if ($hadCapture) {
+            [Environment]::SetEnvironmentVariable('WT_MANAGER_CAPTURE_CD', $oldCapture, 'Process')
+        }
+        else {
+            [Environment]::SetEnvironmentVariable('WT_MANAGER_CAPTURE_CD', $null, 'Process')
+        }
+        if ($hadMarkerFile) {
+            [Environment]::SetEnvironmentVariable('WT_MANAGER_CD_MARKER_FILE', $oldMarkerFile, 'Process')
+        }
+        else {
+            [Environment]::SetEnvironmentVariable('WT_MANAGER_CD_MARKER_FILE', $null, 'Process')
+        }
+        Remove-Item -LiteralPath $markerFile -Force -ErrorAction SilentlyContinue
+    }
+
+    $global:LASTEXITCODE = $exitCode
+}
+
+Register-ArgumentCompleter -Native -CommandName wt -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    $elements = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+    if ([string]::IsNullOrEmpty($wordToComplete)) {
+        $argumentIndex = $elements.Count
+    }
+    else {
+        $argumentIndex = $elements.Count - 1
+    }
+
+    $candidates = @()
+    if ($argumentIndex -eq 1) {
+        $candidates += @('init', 'tui', 'list', 'cd', 'run', 'delete', 'clean', 'project', 'config')
+    }
+
+    $subcommand = if ($elements.Count -gt 1) { $elements[1].Trim("'`"") } else { '' }
+    $worktreeAction = if ($elements.Count -gt 2) { $elements[2].Trim("'`"") } else { '' }
+    $needsBranch = ($argumentIndex -eq 1) -or
+        (($subcommand -in @('cd', 'delete', 'run')) -and $argumentIndex -eq 2) -or
+        (($subcommand -eq 'worktree') -and
+            ($worktreeAction -in @('switch', 'delete', 'run')) -and
+            $argumentIndex -eq 3)
+    if ($needsBranch -and (Get-Command git -ErrorAction SilentlyContinue)) {
+        $insideWorkTree = & git rev-parse --is-inside-work-tree 2>$null
+        if ($LASTEXITCODE -eq 0 -and $insideWorkTree -eq 'true') {
+            $candidates += & git for-each-ref '--format=%(refname:short)' refs/heads 2>$null
+        }
+    }
+
+    $candidates |
+        Where-Object { $_ -like "$wordToComplete*" } |
+        Sort-Object -Unique |
+        ForEach-Object {
+            [Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        }
+}
+"#;
+
+    Ok(template
+        .replace(
+            "__WT_EXECUTABLE__",
+            &powershell_single_quoted_literal(current_exe),
+        )
+        .replace("__WT_MARKER_PREFIX__", SHELL_CD_MARKER_PREFIX))
+}
+
+#[cfg(any(unix, test))]
 fn render_shell_integration_script(current_exe: &Path) -> String {
     format!(
         r#"# wt-manager shell integration
@@ -1072,7 +1417,17 @@ mod tests {
         render_shell_integration_script, shell_cd_marker_line, SHELL_CD_MARKER_FILE_ENV,
         SHELL_CD_MARKER_PREFIX,
     };
+    #[cfg(windows)]
+    use super::{
+        decode_powershell_profile, encode_powershell_profile, init_shell_integration,
+        install_powershell_integration, powershell_single_quoted_literal,
+        render_powershell_integration_script, update_powershell_profile, write_utf8_bom,
+        ProfileEncoding, POWERSHELL_PROFILE_BLOCK_END, POWERSHELL_PROFILE_BLOCK_START,
+    };
+    #[cfg(windows)]
+    use std::ffi::OsStr;
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1236,6 +1591,7 @@ mod tests {
         assert!(!script.contains("grep \"^  cd \""));
     }
 
+    #[cfg(unix)]
     #[test]
     fn shell_integration_changes_directory_from_marker_file() {
         let temp_dir = make_temp_dir("shell-marker");
@@ -1291,6 +1647,7 @@ mod tests {
         assert!(script.contains("COMP_CWORD -eq 1"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn shell_integration_bash_completion_lists_existing_branches() {
         let repo_root = init_repo();
@@ -1329,5 +1686,216 @@ mod tests {
         assert!(!completions.lines().any(|line| line == "bugfix"));
 
         fs::remove_dir_all(repo_root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn powershell_renderer_escapes_executable_and_preserves_wrapper_contract() {
+        let executable = Path::new(r"C:\Program Files\wt's tools\wt.exe");
+        let script = render_powershell_integration_script(executable).unwrap();
+
+        assert!(script.contains("$wtBin = 'C:\\Program Files\\wt''s tools\\wt.exe'"));
+        assert!(script.contains("& $wtBin @args"));
+        assert!(script.contains("[IO.Path]::GetTempFileName()"));
+        assert!(script.contains("New-Object Text.UTF8Encoding($false, $true)"));
+        assert!(script.contains("Set-Location -LiteralPath $targetPath"));
+        assert!(script.contains("$global:LASTEXITCODE = $exitCode"));
+        assert!(script.contains("finally {"));
+        assert!(script.contains("Remove-Item -LiteralPath $markerFile"));
+        assert!(script.contains("Register-ArgumentCompleter -Native -CommandName wt"));
+        assert!(script.contains("git for-each-ref '--format=%(refname:short)' refs/heads"));
+        assert!(script.contains(SHELL_CD_MARKER_PREFIX));
+        assert!(!script.contains("cmd /C"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_profile_update_is_idempotent_and_literal() {
+        let integration_path = Path::new(r"C:\Users\O'Brien\.wt-manager.ps1");
+        let initial = "Set-Alias ll Get-ChildItem\r\n";
+
+        let once = update_powershell_profile(initial, integration_path).unwrap();
+        let twice = update_powershell_profile(&once, integration_path).unwrap();
+
+        assert_eq!(once, twice);
+        assert_eq!(once.matches(POWERSHELL_PROFILE_BLOCK_START).count(), 1);
+        assert_eq!(once.matches(POWERSHELL_PROFILE_BLOCK_END).count(), 1);
+        assert!(once.contains(". 'C:\\Users\\O''Brien\\.wt-manager.ps1'\r\n"));
+        assert!(once.starts_with(initial));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_profile_encodings_round_trip() {
+        let content = "Write-Output '한글'\r\n";
+        for encoding in [
+            ProfileEncoding::Utf8Bom,
+            ProfileEncoding::Utf8,
+            ProfileEncoding::Utf16Le,
+            ProfileEncoding::Utf16Be,
+        ] {
+            let bytes = encode_powershell_profile(content, encoding);
+            let (decoded, detected) = decode_powershell_profile(&bytes).unwrap();
+            assert_eq!(decoded, content);
+            assert_eq!(detected, encoding);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_install_preserves_profile_encoding_and_does_not_duplicate_block() {
+        let temp_dir = make_temp_dir("powershell-profile");
+        let home = temp_dir.join("home");
+        let original = "Write-Output 'existing'\r\n";
+        let executable = temp_dir.join("wt.exe");
+        let cases = [
+            (ProfileEncoding::Utf8Bom, &[0xef, 0xbb, 0xbf][..], "utf8"),
+            (ProfileEncoding::Utf16Le, &[0xff, 0xfe][..], "utf16le"),
+            (ProfileEncoding::Utf16Be, &[0xfe, 0xff][..], "utf16be"),
+        ];
+
+        for (expected_encoding, expected_bom, name) in cases {
+            let profile = temp_dir
+                .join("profiles")
+                .join(format!("{name}-profile.ps1"));
+            fs::create_dir_all(profile.parent().unwrap()).unwrap();
+            fs::write(
+                &profile,
+                encode_powershell_profile(original, expected_encoding),
+            )
+            .unwrap();
+
+            install_powershell_integration(&home, &profile, &executable).unwrap();
+            let after_first = fs::read(&profile).unwrap();
+            install_powershell_integration(&home, &profile, &executable).unwrap();
+            let after_second = fs::read(&profile).unwrap();
+
+            assert_eq!(after_first, after_second);
+            assert!(after_second.starts_with(expected_bom));
+            let (profile_text, actual_encoding) = decode_powershell_profile(&after_second).unwrap();
+            assert_eq!(actual_encoding, expected_encoding);
+            assert_eq!(
+                profile_text.matches(POWERSHELL_PROFILE_BLOCK_START).count(),
+                1
+            );
+        }
+
+        let new_profile = temp_dir.join("profiles").join("new-profile.ps1");
+        install_powershell_integration(&home, &new_profile, &executable).unwrap();
+        assert!(fs::read(new_profile)
+            .unwrap()
+            .starts_with(&[0xef, 0xbb, 0xbf]));
+
+        let generated = fs::read(home.join(".wt-manager.ps1")).unwrap();
+        assert!(generated.starts_with(&[0xef, 0xbb, 0xbf]));
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unsupported_profile_encoding_is_not_modified() {
+        let temp_dir = make_temp_dir("unsupported-profile");
+        let home = temp_dir.join("home");
+        let profile = temp_dir.join("profile.ps1");
+        let unsupported = [0xff, 0xfe, 0x00, 0x00, b'#', 0x00, 0x00, 0x00];
+        fs::write(&profile, unsupported).unwrap();
+
+        let result = install_powershell_integration(&home, &profile, &temp_dir.join("wt.exe"));
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(&profile).unwrap(), unsupported);
+        assert!(!home.join(".wt-manager.ps1").exists());
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_init_requires_explicit_profile() {
+        let error = init_shell_integration(None).unwrap_err().to_string();
+
+        assert!(error.contains("wt init --profile $PROFILE"));
+        assert!(error.contains("cmd.exe"));
+        assert!(error.contains("not supported"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_wrapper_changes_the_calling_shell_directory() {
+        let powershell_hosts = ["pwsh.exe", "powershell.exe"]
+            .iter()
+            .filter_map(|name| crate::process::resolve_executable(OsStr::new(name)))
+            .collect::<Vec<_>>();
+        if powershell_hosts.is_empty() {
+            return;
+        }
+
+        let temp_dir = make_temp_dir("powershell-wrapper");
+        let target_dir = temp_dir.join("target's directory");
+        fs::create_dir_all(&target_dir).unwrap();
+        git(&target_dir, &["init", "-b", "main"]);
+        fs::write(target_dir.join("README.md"), "completion fixture\n").unwrap();
+        git(&target_dir, &["add", "README.md"]);
+        git(&target_dir, &["commit", "-m", "completion fixture"]);
+        git(&target_dir, &["branch", "feature/login"]);
+        let fake_wt = temp_dir.join("fake-wt.ps1");
+        let marker = format!("{}{}", SHELL_CD_MARKER_PREFIX, target_dir.display());
+        let fake_script = format!(
+            "if ($args.Count -ne 2 -or $args[0] -ne 'arg with spaces' -or $args[1] -ne 'quote''value') {{ $global:LASTEXITCODE = 23; return }}\r\n\
+             $utf8 = New-Object Text.UTF8Encoding($false)\r\n\
+             [IO.File]::WriteAllText($env:WT_MANAGER_CD_MARKER_FILE, {}, $utf8)\r\n\
+             $global:LASTEXITCODE = 0\r\n",
+            powershell_single_quoted_literal(Path::new(&marker))
+        );
+        write_utf8_bom(&fake_wt, &fake_script).unwrap();
+        let wrapper = temp_dir.join("wt-manager.ps1");
+        write_utf8_bom(
+            &wrapper,
+            &render_powershell_integration_script(&fake_wt).unwrap(),
+        )
+        .unwrap();
+        let command = format!(
+            ". {}; wt 'wrong'; \
+             if ($global:LASTEXITCODE -ne 23) {{ exit 30 }}; \
+             if ((Get-Location).Path -ne {}) {{ exit 34 }}; \
+             if ($env:WT_MANAGER_CAPTURE_CD -ne 'before') {{ exit 32 }}; \
+             if ($env:WT_MANAGER_CD_MARKER_FILE -ne 'existing-marker') {{ exit 33 }}; \
+             wt 'arg with spaces' 'quote''value'; \
+             if ((Get-Location).Path -ne {}) {{ exit 31 }}; \
+             if ($env:WT_MANAGER_CAPTURE_CD -ne 'before') {{ exit 32 }}; \
+             if ($env:WT_MANAGER_CD_MARKER_FILE -ne 'existing-marker') {{ exit 33 }}; \
+             $completions = @((TabExpansion2 'wt cd feat' 10).CompletionMatches.CompletionText); \
+             if ($completions -notcontains 'feature/login') {{ exit 35 }}; \
+             $subcommands = @((TabExpansion2 'wt cl' 5).CompletionMatches.CompletionText); \
+             if ($subcommands -notcontains 'clean') {{ exit 36 }}; \
+             exit $global:LASTEXITCODE",
+            powershell_single_quoted_literal(&wrapper),
+            powershell_single_quoted_literal(&temp_dir),
+            powershell_single_quoted_literal(&target_dir)
+        );
+
+        for powershell in powershell_hosts {
+            let status = Command::new(&powershell)
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    &command,
+                ])
+                .current_dir(&temp_dir)
+                .env("WT_MANAGER_CAPTURE_CD", "before")
+                .env("WT_MANAGER_CD_MARKER_FILE", "existing-marker")
+                .status()
+                .unwrap();
+
+            assert!(
+                status.success(),
+                "PowerShell wrapper exited with {status} under {}",
+                powershell.display()
+            );
+        }
+        fs::remove_dir_all(temp_dir).unwrap();
     }
 }

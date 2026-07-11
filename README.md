@@ -1,40 +1,78 @@
 # wt-manager
 
+## Quick Start
+
+### macOS / Linux
+
+zsh 또는 bash에서 설치합니다.
+
+```bash
+cargo install --git https://github.com/boxqkrtm/wt-manager.git
+wt init
+
+# 현재 사용하는 셸 설정을 다시 로드
+source ~/.zshrc   # zsh
+# source ~/.bashrc  # bash
+
+wt
+```
+
+### Windows
+
+PowerShell 5.1 또는 PowerShell 7에서 설치합니다.
+
+```powershell
+cargo install --git https://github.com/boxqkrtm/wt-manager.git
+wt init --profile $PROFILE
+. $PROFILE
+
+wt
+```
+
+PowerShell 5.1과 PowerShell 7은 서로 다른 `$PROFILE`을 사용할 수 있으므로 현재 PowerShell의 값을 그대로 전달해야 합니다. Windows의 `cmd.exe` 셸 통합은 지원하지 않습니다.
+
+---
+
 Git worktree 관리 도구 - TUI 기반 워크트리 생성/전환/삭제
+
 ![alt preview image](./screenshot.png)
 
 ## 요구사항
 
-- **zsh/bash**: `wt init` shell integration 사용
-- **cargo**: Rust 빌드 도구
+- **Git**: Git worktree 명령을 지원하는 Git. Windows에서는 Git for Windows 사용
+- **셸**:
+  - macOS/Linux: zsh 또는 bash
+  - Windows: PowerShell 5.1 또는 PowerShell 7
+- **cargo**: 소스에서 설치하거나 빌드할 때 필요
 
-## 설치
+## 로컬 소스에서 설치
 
-```bash
-# 권장: git URL에서 바로 설치
-cargo install --git https://github.com/boxqkrtm/wt-manager.git
-wt init
-source ~/.zshrc
-```
-
-대안:
-
-```bash
+```text
 git clone https://github.com/boxqkrtm/wt-manager.git
 cd wt-manager
 cargo install --path .
+```
+
+설치 후 현재 플랫폼에 맞게 셸 통합을 등록합니다.
+
+```bash
+# macOS / Linux
 wt init
-source ~/.zshrc
+```
+
+```powershell
+# Windows PowerShell
+wt init --profile $PROFILE
 ```
 
 `wt init`은:
-- `~/.wt-manager.sh`를 생성/갱신
-- `~/.zshrc`에 `source ~/.wt-manager.sh` 추가
-- `~/.bashrc`가 있으면 여기도 동일하게 추가
-- zsh/bash에서 `wt <Tab>`, `wt cd <Tab>`, `wt run <Tab>`, `wt delete <Tab>` 기존 로컬 브랜치 자동완성 등록
-- TUI 출력은 터미널에 직접 렌더링하고, 선택 후 이동 경로는 호출별 임시 marker 파일로 전달
+- macOS/Linux에서 `~/.wt-manager.sh`를 생성하고 zsh/bash rc에 등록
+- Windows에서 `~/.wt-manager.ps1`을 UTF-8로 생성하고 `--profile`로 지정한 PowerShell profile에 등록
+- 지원 셸에서 `wt <Tab>`, `wt cd <Tab>`, `wt run <Tab>`, `wt delete <Tab>`의 명령 및 로컬 브랜치 자동완성 등록
+- TUI 출력은 터미널에 직접 렌더링하고, 선택 후 이동 경로는 호출별 UTF-8 marker 파일로 전달
+- marker 처리 후 호출한 셸에서 `cd` 또는 `Set-Location -LiteralPath`를 수행하고 임시 파일과 환경 변수를 정리
 
-> `~/.wt-manager.sh`는 generated file이며, `wt init` 재실행 시 갱신될 수 있습니다. marker 임시 파일은 이동 처리 후 삭제됩니다.
+> `~/.wt-manager.sh`와 `~/.wt-manager.ps1`은 generated file이며 `wt init` 재실행 시 갱신됩니다. PowerShell profile은 기존 UTF-8/UTF-16 인코딩을 보존하고 같은 통합 블록을 중복 등록하지 않습니다.
 
 ## 사용법
 
@@ -47,8 +85,9 @@ wt
 # TUI로 강제 진입
 wt tui
 
-# shell integration 설치
+# shell integration 설치 (macOS / Linux)
 wt init
+# Windows PowerShell: wt init --profile $PROFILE
 
 # 특정 브랜치 워크트리 생성/이동
 wt feature-branch
@@ -109,7 +148,8 @@ wt config hook remove post-create 0
   - `..`가 포함된 상위 디렉터리 경로는 허용하지 않음
   - source가 없으면 skip
   - destination이 이미 있으면 overwrite하지 않음
-- hook은 `zsh -c`로 실행되며, 필요한 경우 shell rc를 먼저 source한 뒤 실행합니다.
+- hook은 macOS/Linux에서 zsh/bash/sh, Windows에서 `pwsh` 또는 `powershell`로 실행됩니다. Windows에서는 cmd/sh로 fallback하지 않습니다.
+- 기존 Windows DB에 자동 seed된 POSIX profile-source prefix는 실행 시 제거하며, 사용자가 직접 추가한 hook은 현재 플랫폼의 셸 문법으로 작성해야 합니다.
 - 런타임에서는 파일 탐지 기반 자동 설치를 하지 않고, DB에 저장된 hook만 실행합니다.
 
 ### `--help`에서 확인할 수 있는 항목
@@ -117,7 +157,7 @@ wt config hook remove post-create 0
 - `wt --help`에 기본 동작(`wt`, `wt <branch>`), TUI 진입(`wt tui`), 워크트리/프로젝트 명령이 노출됩니다.
 - `wt worktree switch`와 `wt <branch>`는 동작이 같습니다.
 - 삭제는 기본적으로 안전 삭제입니다. 메인 워크트리는 삭제할 수 없고, 실패 시 메시지에 `--force` 재시도 권장안이 표시됩니다.
-- 실제로 셸의 작업 디렉터리가 이동되는 것은 `wt init`이 생성하는 `~/.wt-manager.sh`가 marker 임시 파일을 읽고 `cd`를 수행하는 동작입니다.
+- 실제 작업 디렉터리 이동은 `wt init`이 생성한 셸 통합(`~/.wt-manager.sh` 또는 `~/.wt-manager.ps1`)이 호출별 marker 파일을 읽어 수행합니다.
 
 ### TUI 조작법
 
@@ -162,12 +202,12 @@ wt config hook remove post-create 0
 
 ### 동작 방식
 
-1. 새 워크트리는 기본적으로 `~/_wt/{owner}-{repo}-{hash5}/{브랜치}/`에 생성
+1. 새 워크트리는 기본적으로 `~/_wt/{owner}-{repo}-{hash5}/` 아래에 생성됩니다. macOS/Linux는 브랜치 경로를 유지하고, Windows는 금지 문자·예약명·긴 경로·대소문자 충돌을 피하는 `slug-{hash16}` 디렉터리명을 사용합니다.
 2. 기존 버전에서 이미 사용 중인 `~/_wt/{프로젝트명}_{해시}/` 경로가 있으면 그 경로를 계속 재사용
    이 fallback은 구버전 호환 유지를 위한 동작이며, 충분한 마이그레이션 이후 제거될 수 있습니다.
 3. 새 repo entry가 처음 생성될 때 lockfile / env manager 파일 기준으로 기본 `postCreate` hook 값이 seed 될 수 있음
 4. worktree 생성/이동 시에는 파일 자동 탐지 없이 `~/.wt-manager/db.json`에 저장된 `postCreate` / `postCd` hook만 실행
-5. 실제 셸 이동은 `wt init`이 생성한 `~/.wt-manager.sh`가 호출별 marker 임시 파일에서 이동 경로를 읽고 `cd`한 뒤 파일을 삭제함
+5. 실제 셸 이동은 생성된 zsh/bash 또는 PowerShell 통합이 호출별 marker 파일에서 이동 경로를 읽고, 이동 후 임시 파일과 전달용 환경 변수를 정리합니다.
 
 ## 라이선스
 
