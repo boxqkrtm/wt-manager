@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(any(not(windows), test))]
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -6,10 +7,12 @@ use std::process::Command;
 
 pub struct SetupManager;
 
+#[cfg(any(not(windows), test))]
 fn split_path_entries(path: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
     path.map(env::split_paths).into_iter().flatten().collect()
 }
 
+#[cfg(any(not(windows), test))]
 fn command_exists_in_path(command: &str, path: Option<&std::ffi::OsStr>) -> bool {
     split_path_entries(path)
         .into_iter()
@@ -17,10 +20,12 @@ fn command_exists_in_path(command: &str, path: Option<&std::ffi::OsStr>) -> bool
         .any(|candidate| candidate.is_file())
 }
 
+#[cfg(not(windows))]
 fn hook_shell() -> (&'static str, &'static str) {
     hook_shell_for_path(env::var_os("PATH").as_deref())
 }
 
+#[cfg(not(windows))]
 fn hook_shell_for_path(path: Option<&std::ffi::OsStr>) -> (&'static str, &'static str) {
     if command_exists_in_path("zsh", path) {
         (
@@ -35,6 +40,29 @@ fn hook_shell_for_path(path: Option<&std::ffi::OsStr>) -> (&'static str, &'stati
     } else {
         ("sh", ". ~/.profile 2>/dev/null || true; ")
     }
+}
+#[cfg(windows)]
+const LEGACY_POSIX_PROFILE_SOURCE_PREFIX: &str =
+    "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; ";
+
+#[cfg(windows)]
+fn normalize_windows_hook(hook: &str) -> &str {
+    hook.strip_prefix(LEGACY_POSIX_PROFILE_SOURCE_PREFIX)
+        .unwrap_or(hook)
+}
+
+#[cfg(windows)]
+fn windows_hook_shell_with(
+    mut resolve: impl FnMut(&std::ffi::OsStr) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    ["pwsh", "powershell"]
+        .into_iter()
+        .find_map(|name| resolve(std::ffi::OsStr::new(name)))
+}
+
+#[cfg(windows)]
+fn windows_hook_shell() -> Option<PathBuf> {
+    windows_hook_shell_with(crate::process::resolve_executable)
 }
 
 impl SetupManager {
@@ -107,17 +135,38 @@ impl SetupManager {
     }
 
     fn run_hooks(worktree_path: &Path, hook_name: &str, hooks: &[String]) -> Result<()> {
+        if hooks.is_empty() {
+            return Ok(());
+        }
+
+        #[cfg(not(windows))]
         let (shell, shell_setup) = hook_shell();
+
+        #[cfg(windows)]
+        let shell = windows_hook_shell().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Cannot run {} hooks: neither 'pwsh' nor 'powershell' was found on PATH",
+                hook_name
+            )
+        })?;
 
         for hook in hooks {
             println!("Running {} hook: {}", hook_name, hook);
 
+            #[cfg(not(windows))]
             let output = Command::new(shell)
                 .arg("-c")
                 .arg(format!("{}{}", shell_setup, hook))
                 .current_dir(worktree_path)
                 .output();
 
+            #[cfg(windows)]
+            let output = Command::new(&shell)
+                .arg("-NoLogo")
+                .arg("-Command")
+                .arg(normalize_windows_hook(hook))
+                .current_dir(worktree_path)
+                .output();
             match output {
                 Ok(output) if output.status.success() => {}
                 Ok(output) => {
@@ -143,8 +192,11 @@ impl SetupManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_exists_in_path, hook_shell_for_path, split_path_entries};
-    use std::ffi::OsString;
+    #[cfg(not(windows))]
+    use super::hook_shell_for_path;
+    use super::{command_exists_in_path, split_path_entries};
+    #[cfg(windows)]
+    use super::{normalize_windows_hook, windows_hook_shell_with, SetupManager};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -170,7 +222,7 @@ mod tests {
         let fake_bash = dir.join("bash");
         fs::write(&fake_bash, "#!/bin/sh\n").unwrap();
 
-        let path = OsString::from(dir.display().to_string());
+        let path = std::env::join_paths([&dir]).unwrap();
 
         assert!(command_exists_in_path("bash", Some(path.as_os_str())));
         assert!(!command_exists_in_path("zsh", Some(path.as_os_str())));
@@ -178,6 +230,7 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn hook_shell_prefers_zsh_then_bash_then_sh() {
         let zsh_dir = make_temp_dir("zsh-path");
@@ -185,9 +238,10 @@ mod tests {
         fs::write(zsh_dir.join("zsh"), "#!/bin/sh\n").unwrap();
         fs::write(bash_dir.join("bash"), "#!/bin/sh\n").unwrap();
 
-        let preferred = OsString::from(format!("{}:{}", zsh_dir.display(), bash_dir.display()));
-        let fallback = OsString::from(bash_dir.display().to_string());
-        let missing = OsString::from(make_temp_dir("missing-path").display().to_string());
+        let preferred = std::env::join_paths([&zsh_dir, &bash_dir]).unwrap();
+        let fallback = std::env::join_paths([&bash_dir]).unwrap();
+        let missing_dir = make_temp_dir("missing-path");
+        let missing = std::env::join_paths([&missing_dir]).unwrap();
 
         assert_eq!(hook_shell_for_path(Some(preferred.as_os_str())).0, "zsh");
         assert_eq!(hook_shell_for_path(Some(fallback.as_os_str())).0, "bash");
@@ -195,6 +249,67 @@ mod tests {
 
         fs::remove_dir_all(zsh_dir).unwrap();
         fs::remove_dir_all(bash_dir).unwrap();
-        fs::remove_dir_all(PathBuf::from(missing)).unwrap();
+        fs::remove_dir_all(missing_dir).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_hook_shell_prefers_pwsh_then_windows_powershell() {
+        use std::ffi::OsStr;
+
+        let pwsh = PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe");
+        let windows_powershell =
+            PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
+
+        let selected = windows_hook_shell_with(|name| match name.to_str().unwrap() {
+            "pwsh" => Some(pwsh.clone()),
+            "powershell" => Some(windows_powershell.clone()),
+            _ => None,
+        });
+        assert_eq!(selected, Some(pwsh));
+
+        let mut attempts = Vec::new();
+        let selected = windows_hook_shell_with(|name: &OsStr| {
+            attempts.push(name.to_owned());
+            (name == OsStr::new("powershell")).then(|| windows_powershell.clone())
+        });
+        assert_eq!(selected, Some(windows_powershell));
+        assert_eq!(
+            attempts,
+            [
+                OsStr::new("pwsh").to_owned(),
+                OsStr::new("powershell").to_owned()
+            ]
+        );
+        assert_eq!(windows_hook_shell_with(|_| None), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_hook_normalization_removes_only_legacy_seed_prefix() {
+        let legacy =
+            "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; mise install";
+        assert_eq!(normalize_windows_hook(legacy), "mise install");
+        assert_eq!(normalize_windows_hook("pnpm install"), "pnpm install");
+        assert_eq!(
+            normalize_windows_hook(
+                "source ~/.bashrc 2>/dev/null || source ~/.zshrc 2>/dev/null || true; nvm use"
+            ),
+            "source ~/.bashrc 2>/dev/null || source ~/.zshrc 2>/dev/null || true; nvm use"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_hooks_execute_in_powershell_from_the_worktree_directory() {
+        let worktree = make_temp_dir("powershell-hook");
+        let hook = format!(
+            "{}Set-Content -LiteralPath 'hook-ran.txt' -Value 'ok' -NoNewline",
+            super::LEGACY_POSIX_PROFILE_SOURCE_PREFIX
+        );
+
+        SetupManager::run_hooks(&worktree, "post-create", &[hook]).unwrap();
+
+        assert!(worktree.join("hook-ran.txt").is_file());
+        fs::remove_dir_all(worktree).unwrap();
     }
 }

@@ -69,7 +69,7 @@ pub fn show_project_selector() -> Result<()> {
                 // Navigate directly to the project root
                 println!("\n{} {}", messages.switching_to_project(), project.name);
                 crate::maybe_print_shell_cd_marker(&project.path);
-                println!("  cd {}", project.path.display());
+                crate::print_cd_command(&project.path);
 
                 crate::setup::SetupManager::run_auto_setup(&project.path)?;
             }
@@ -111,7 +111,7 @@ pub fn show_worktree_selector(repo_root: &Path) -> Result<()> {
                     // Existing worktree - switch to it
                     println!("\n{} {}", messages.switching_to_worktree(), wt.name());
                     crate::maybe_print_shell_cd_marker(&wt.path);
-                    println!("  cd {}", wt.path.display());
+                    crate::print_cd_command(&wt.path);
 
                     crate::setup::SetupManager::run_post_cd(repo_root, &wt.path)?;
                     crate::setup::SetupManager::run_auto_setup(&wt.path)?;

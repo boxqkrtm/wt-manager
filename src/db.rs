@@ -142,19 +142,29 @@ fn ensure_project_entry(db: &mut Database, repo_path: &Path) -> Result<String> {
     Ok(key)
 }
 
+#[cfg(not(windows))]
+const DEFAULT_POSIX_PROFILE_SOURCE_PREFIX: &str =
+    "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; ";
+
+fn default_runtime_hook(command: &str) -> String {
+    #[cfg(windows)]
+    {
+        command.to_string()
+    }
+
+    #[cfg(not(windows))]
+    {
+        format!("{DEFAULT_POSIX_PROFILE_SOURCE_PREFIX}{command}")
+    }
+}
+
 fn default_automation_for_repo(repo_path: &Path) -> Option<ProjectAutomationConfig> {
     let mut post_create_hooks = Vec::new();
 
     if repo_path.join("mise.toml").exists() || repo_path.join(".mise.toml").exists() {
-        post_create_hooks.push(
-            "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; mise install"
-                .to_string(),
-        );
+        post_create_hooks.push(default_runtime_hook("mise install"));
     } else if repo_path.join(".nvmrc").exists() {
-        post_create_hooks.push(
-            "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; nvm use"
-                .to_string(),
-        );
+        post_create_hooks.push(default_runtime_hook("nvm use"));
     }
 
     if repo_path.join("pnpm-lock.yaml").exists() {
@@ -286,4 +296,69 @@ pub fn remove_hook(repo_path: &Path, hook_kind: &str, index: usize) -> Result<bo
     hooks.remove(index);
     save_db(&db)?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_automation_for_repo;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("wt-manager-db-{prefix}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn default_automation_uses_platform_commands_for_mise_and_pnpm() {
+        let repo = make_temp_dir("mise-pnpm");
+        fs::write(repo.join("mise.toml"), "").unwrap();
+        fs::write(repo.join("pnpm-lock.yaml"), "").unwrap();
+
+        let automation = default_automation_for_repo(&repo).unwrap();
+
+        #[cfg(windows)]
+        assert_eq!(
+            automation.post_create_hooks,
+            ["mise install", "pnpm install"]
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            automation.post_create_hooks,
+            [
+                "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; mise install",
+                "pnpm install",
+            ]
+        );
+
+        fs::remove_dir_all(repo).unwrap();
+    }
+
+    #[test]
+    fn default_automation_uses_platform_commands_for_nvm_and_npm() {
+        let repo = make_temp_dir("nvm-npm");
+        fs::write(repo.join(".nvmrc"), "").unwrap();
+        fs::write(repo.join("package-lock.json"), "").unwrap();
+
+        let automation = default_automation_for_repo(&repo).unwrap();
+
+        #[cfg(windows)]
+        assert_eq!(automation.post_create_hooks, ["nvm use", "npm install"]);
+        #[cfg(not(windows))]
+        assert_eq!(
+            automation.post_create_hooks,
+            [
+                "source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; nvm use",
+                "npm install",
+            ]
+        );
+
+        fs::remove_dir_all(repo).unwrap();
+    }
 }

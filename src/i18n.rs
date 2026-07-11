@@ -591,6 +591,7 @@ impl Messages {
     }
 
     // Shell integration init messages
+    #[cfg(unix)]
     pub fn init_already_configured(&self) -> &str {
         match self.lang {
             Language::English => "Already configured {}",
@@ -598,6 +599,7 @@ impl Messages {
         }
     }
 
+    #[cfg(unix)]
     pub fn init_updated(&self) -> &str {
         match self.lang {
             Language::English => "Updated {}",
@@ -605,6 +607,7 @@ impl Messages {
         }
     }
 
+    #[cfg(unix)]
     pub fn init_generated(&self) -> &str {
         match self.lang {
             Language::English => "Generated {}",
@@ -612,6 +615,7 @@ impl Messages {
         }
     }
 
+    #[cfg(unix)]
     pub fn init_already_set_up(&self) -> &str {
         match self.lang {
             Language::English => "Shell integration was already configured.",
@@ -785,12 +789,22 @@ impl Messages {
             Language::Korean => "--merged에서 사용할 베이스 브랜치",
         }
     }
+
+    pub fn arg_profile_help(&self) -> &'static str {
+        match self.lang {
+            Language::English => {
+                "PowerShell profile path (Windows: pass the current shell's $PROFILE)"
+            }
+            Language::Korean => "PowerShell profile 경로 (Windows에서는 현재 셸의 $PROFILE 전달)",
+        }
+    }
 }
 
 const LONG_HELP_EN: &str = r#"Advanced Git worktree manager for terminal users.
 
 Usage:
-  wt init                     # install shell integration into ~/.wt-manager.sh and your shell rc
+  wt init                     # install zsh/bash integration on macOS/Linux
+  wt init --profile $PROFILE  # install PowerShell integration on Windows
   wt                          # interactive project/worktree selector (default)
   wt <branch>                 # legacy mode: create or switch worktree
   wt tui                      # explicitly open interactive TUI
@@ -817,8 +831,8 @@ Delete safety:
   - If deletion fails (e.g., uncommitted changes), retry with --force
 
 Note:
-  Actual directory change is performed by the generated shell integration (`~/.wt-manager.sh`)
-  by parsing `cd` output from the wt command.
+  Directory changes are performed by `~/.wt-manager.sh` for zsh/bash or
+  `~/.wt-manager.ps1` for PowerShell. cmd.exe shell integration is not supported.
 
 Examples:
   wt
@@ -832,7 +846,8 @@ Examples:
 const LONG_HELP_KO: &str = r#"터미널 사용자를 위한 고급 Git 워크트리 관리 도구.
 
 사용법:
-  wt init                     # 셸 통합 설치 (~/.wt-manager.sh 및 shell rc에 저장)
+  wt init                     # macOS/Linux zsh/bash 셸 통합 설치
+  wt init --profile $PROFILE  # Windows PowerShell 셸 통합 설치
   wt                          # 인터랙티브 프로젝트/워크트리 선택기 (기본값)
   wt <브랜치>                 # 레거시 모드: 워크트리 생성 또는 전환
   wt tui                      # 인터랙티브 TUI 열기
@@ -859,8 +874,8 @@ const LONG_HELP_KO: &str = r#"터미널 사용자를 위한 고급 Git 워크트
   - 삭제 실패 시 (예: 미커밋 변경사항) --force로 재시도하세요
 
 참고:
-  실제 디렉터리 변경은 생성된 셸 통합 (`~/.wt-manager.sh`)이
-  wt 명령의 `cd` 출력을 파싱하여 수행합니다.
+  실제 디렉터리 변경은 zsh/bash의 `~/.wt-manager.sh` 또는 PowerShell의
+  `~/.wt-manager.ps1`이 수행합니다. cmd.exe 셸 통합은 지원하지 않습니다.
 
 예시:
   wt
